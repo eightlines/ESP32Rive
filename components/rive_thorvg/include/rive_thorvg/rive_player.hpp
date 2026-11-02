@@ -73,6 +73,14 @@ public:
   // valid while the player is alive.
   bool load(const uint8_t* data, size_t size);
 
+  // Audio (with WITH_RIVE_AUDIO): decodes the file's sounds once, at the
+  // audio engine's channel count and sample rate, and swaps each for a
+  // buffer of ready samples. Playback then only mixes (no per-block
+  // decoding or resampling). Sounds longer than maxSeconds keep streaming
+  // from their compressed bytes. Call after load(), before playback. Each
+  // sound is logged; returns the bytes of samples kept in memory.
+  size_t prepareAudio(uint32_t channels, uint32_t sampleRate, float maxSeconds);
+
   // Advances the scene by `seconds`.
   void advance(float seconds);
   // Records the current frame's draw calls and moves on to the next frame

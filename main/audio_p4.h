@@ -15,6 +15,10 @@
 // only measured, so sounds can be seen in the log.
 esp_err_t audio_start(int core);
 
+// The engine's format, for RivePlayer::prepareAudio().
+uint32_t audio_channels(void);
+uint32_t audio_sample_rate(void);
+
 typedef struct
 {
   float peak;        // highest |sample| since the last call (0..1)

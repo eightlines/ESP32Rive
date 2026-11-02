@@ -203,6 +203,21 @@ static void rive_task(void*)
     vTaskDelete(nullptr);
     return;
   }
+#if CONFIG_RIVE_AUDIO_OUT && CONFIG_RIVE_AUDIO_BUFFER_SECONDS > 0
+  // Decode short sounds once now, so playing them only mixes samples.
+  {
+    const int64_t t0 = esp_timer_get_time();
+    const size_t bytes = player.prepareAudio(
+        audio_channels(), audio_sample_rate(),
+        float(CONFIG_RIVE_AUDIO_BUFFER_SECONDS));
+    if (bytes > 0)
+    {
+      ESP_LOGI(TAG, "sounds decoded in advance: %u KB in %.0f ms",
+               unsigned(bytes / 1024),
+               double(esp_timer_get_time() - t0) / 1000.0);
+    }
+  }
+#endif
   ESP_LOGI(TAG, "free heap: internal %u, PSRAM %u",
            unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
            unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
