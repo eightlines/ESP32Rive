@@ -1,0 +1,7 @@
+## Fetched by the ESP-IDF Component Manager on first build.
+dependencies:
+  idf: ">=5.5"
+  # ST7703 MIPI-DSI panel driver for the Waveshare 4" 720x720 display.
+  # (The full Waveshare BSP is not used: it pulls in LVGL, which this
+  # project does not need.)
+  waveshare/esp_lcd_st7703: "^2.0.0"

@@ -1,0 +1,15 @@
+# ESP-IDF
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+
+# Host test build
+build-host/
+out/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
