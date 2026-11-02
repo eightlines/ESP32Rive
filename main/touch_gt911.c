@@ -17,10 +17,9 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include "board_i2c.h"
 #include "display_p4.h"
 
-#define TOUCH_I2C_SDA 7
-#define TOUCH_I2C_SCL 8
 #define TOUCH_I2C_HZ 400000
 #define TOUCH_TIMEOUT_MS 20
 
@@ -124,19 +123,10 @@ static void touch_task(void* arg)
 
 esp_err_t touch_gt911_start(int core, uint32_t period_ms)
 {
-  const i2c_master_bus_config_t bus_cfg = {
-      .i2c_port = -1, // any free controller
-      .sda_io_num = TOUCH_I2C_SDA,
-      .scl_io_num = TOUCH_I2C_SCL,
-      .clk_source = I2C_CLK_SRC_DEFAULT,
-      .glitch_ignore_cnt = 7,
-      .flags.enable_internal_pullup = true,
-  };
-  esp_err_t err = i2c_new_master_bus(&bus_cfg, &s_bus);
-  if (err != ESP_OK)
+  s_bus = board_i2c_bus();
+  if (s_bus == NULL)
   {
-    ESP_LOGE(TAG, "I2C bus init failed: %s", esp_err_to_name(err));
-    return err;
+    return ESP_FAIL;
   }
   uint16_t address = 0;
   if (i2c_master_probe(s_bus, 0x5D, 50) == ESP_OK)
@@ -150,8 +140,6 @@ esp_err_t touch_gt911_start(int core, uint32_t period_ms)
   else
   {
     ESP_LOGE(TAG, "no GT911 at 0x5D or 0x14");
-    i2c_del_master_bus(s_bus);
-    s_bus = NULL;
     return ESP_ERR_NOT_FOUND;
   }
   const i2c_device_config_t dev_cfg = {
@@ -159,7 +147,7 @@ esp_err_t touch_gt911_start(int core, uint32_t period_ms)
       .device_address = address,
       .scl_speed_hz = TOUCH_I2C_HZ,
   };
-  err = i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev);
+  esp_err_t err = i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev);
   if (err != ESP_OK)
   {
     return err;

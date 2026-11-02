@@ -3,14 +3,21 @@
 //
 //   rive_host_render <file.riv> <out_dir> [frames=10] [fps=30] [size=720]
 //                    [lanes=2] [partial=1] [buffers=2] [balance=1] [cull=1]
-//                    [bgskip=1] [inplace=1]
+//                    [bgskip=1] [inplace=1] [wav=<file>] [tap=x,y,f0,f1]
 //
+// wav: with Rive audio built in, mixes the file's sounds at 48 kHz stereo
+// in step with the frames (as the board's audio task does) and writes them
+// to a 16-bit WAV file. tap: a touch like the board's at panel pixel (x, y),
+// down on frame f0 (pointer move + down) and up on frame f1.
 // lanes > 1 renders the extra lanes on worker threads, like the board does
 // on its second core. partial=1 enables ThorVG's partial redraw. buffers=2
 // alternates two frame buffers (one ThorVG canvas per buffer per lane), as
 // the board does to overlap drawing with the copy to the display.
 // balance=1 moves the split between two lanes toward balance.
 #include "rive_thorvg/rive_player.hpp"
+#ifdef WITH_RIVE_AUDIO
+#include "rive/audio/audio_engine.hpp"
+#endif
 
 #include <condition_variable>
 #include <cstdio>
@@ -131,6 +138,35 @@ private:
   std::thread m_thread;
 };
 
+static void writeWav(const std::string& path,
+                     const std::vector<int16_t>& samples,
+                     uint32_t rate,
+                     uint32_t channels)
+{
+  FILE* f = std::fopen(path.c_str(), "wb");
+  if (!f)
+  {
+    return;
+  }
+  auto u32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, f); };
+  auto u16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, f); };
+  const uint32_t bytes = uint32_t(samples.size() * 2);
+  std::fwrite("RIFF", 1, 4, f);
+  u32(36 + bytes);
+  std::fwrite("WAVEfmt ", 1, 8, f);
+  u32(16);
+  u16(1);
+  u16(uint16_t(channels));
+  u32(rate);
+  u32(rate * channels * 2);
+  u16(uint16_t(channels * 2));
+  u16(16);
+  std::fwrite("data", 1, 4, f);
+  u32(bytes);
+  std::fwrite(samples.data(), 2, samples.size(), f);
+  std::fclose(f);
+}
+
 int main(int argc, char** argv)
 {
   if (argc < 3)
@@ -151,6 +187,28 @@ int main(int argc, char** argv)
   const bool cull = argc > 10 ? std::atoi(argv[10]) != 0 : true;
   const bool bgskip = argc > 11 ? std::atoi(argv[11]) != 0 : true;
   const bool inplace = argc > 12 ? std::atoi(argv[12]) != 0 : true;
+  const std::string wavPath = argc > 13 ? argv[13] : "";
+  float tapX = 0, tapY = 0;
+  int tapDown = -1, tapUp = -1;
+  if (argc > 14)
+  {
+    std::sscanf(argv[14], "%f,%f,%d,%d", &tapX, &tapY, &tapDown, &tapUp);
+  }
+  constexpr uint32_t kAudioRate = 48000, kAudioChannels = 2;
+  std::vector<int16_t> wav;
+#ifdef WITH_RIVE_AUDIO
+  // Before loading, so the file's audio events find the engine.
+  auto audio = wavPath.empty() ? nullptr
+                               : rive::AudioEngine::MakeAndStore(kAudioChannels,
+                                                                 kAudioRate);
+  double audioDue = 0.0;
+  std::vector<float> mix;
+#else
+  if (!wavPath.empty())
+  {
+    std::fprintf(stderr, "built without Rive audio, no WAV written\n");
+  }
+#endif
 
   std::vector<uint8_t> riv = readFile(argv[1]);
   if (riv.empty())
@@ -188,10 +246,38 @@ int main(int argc, char** argv)
     int rebuilds = 0, moves = 0;
     for (int i = 0; i < frames; ++i)
     {
+      if (i == tapDown)
+      {
+        player.pointerMove(tapX, tapY);
+        player.pointerDown(tapX, tapY);
+      }
+      if (i == tapUp)
+      {
+        player.pointerUp(tapX, tapY);
+        player.pointerExit(tapX, tapY);
+      }
       if (i > 0)
       {
         player.advance(1.0f / fps);
       }
+#ifdef WITH_RIVE_AUDIO
+      if (audio && i > 0)
+      {
+        // Pull the frame's worth of mixed audio, as the board's audio task
+        // does continuously.
+        audioDue += kAudioRate / fps;
+        const uint64_t n = uint64_t(audioDue);
+        audioDue -= double(n);
+        mix.assign(n * kAudioChannels, 0.0f);
+        uint64_t got = 0;
+        audio->readAudioFrames(mix.data(), n, &got);
+        for (float v : mix)
+        {
+          v = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+          wav.push_back(int16_t(v * 32767.0f));
+        }
+      }
+#endif
       player.build();
       for (auto& w : workers)
       {
@@ -242,6 +328,19 @@ int main(int argc, char** argv)
                 moves,
                 lanes > 1 ? player.laneY0(1) : size,
                 player.stats().draws);
+    if (!wavPath.empty() && !wav.empty())
+    {
+      size_t loud = 0;
+      for (int16_t v : wav)
+      {
+        loud += (v > 64 || v < -64) ? 1 : 0;
+      }
+      writeWav(wavPath, wav, kAudioRate, kAudioChannels);
+      std::printf("audio: %zu frames written to %s, %.1f%% non-silent\n",
+                  wav.size() / kAudioChannels,
+                  wavPath.c_str(),
+                  100.0 * loud / wav.size());
+    }
     workers.clear();
     player.destroyLane(0);
   }

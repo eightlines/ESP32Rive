@@ -5,3 +5,5 @@ dependencies:
   # (The full Waveshare BSP is not used: it pulls in LVGL, which this
   # project does not need.)
   waveshare/esp_lcd_st7703: "^2.0.0"
+  # ES8311 codec + I2S setup for Rive audio (main/audio_p4.cpp).
+  espressif/esp_codec_dev: "^1.3.0"

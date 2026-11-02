@@ -9,6 +9,13 @@ endif()
 configure_file("${CMAKE_CURRENT_LIST_DIR}/assets/${RIVE_FILE_NAME}"
                "${CMAKE_CURRENT_BINARY_DIR}/rive_file.riv" COPYONLY)
 
+# Audio output (Rive player > Audio output): esp_codec_dev comes from
+# idf_component.yml.
+set(AUDIO_SRCS)
+if(CONFIG_RIVE_AUDIO_OUT)
+    set(AUDIO_SRCS "audio_p4.cpp")
+endif()
+
 idf_component_register(
     SRCS
         "main.cpp"
@@ -16,8 +23,10 @@ idf_component_register(
         "raster_profile.cpp"
         "pie_selftest.cpp"
         "touch_gt911.c"
+        "board_i2c.c"
+        ${AUDIO_SRCS}
     INCLUDE_DIRS "."
-    REQUIRES rive_thorvg esp_lcd esp_driver_ppa esp_driver_ledc esp_driver_i2c esp_timer
+    REQUIRES rive_thorvg esp_lcd esp_driver_ppa esp_driver_ledc esp_driver_i2c esp_driver_i2s esp_timer
     EMBED_FILES "${CMAKE_CURRENT_BINARY_DIR}/rive_file.riv"
 )
 

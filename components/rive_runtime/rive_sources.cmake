@@ -6,9 +6,9 @@
 # Produces RIVE_SRCS, RIVE_PUBLIC_INCS, RIVE_DEFINES (private) and
 # RIVE_PUBLIC_DEFINES (must be seen by everything including Rive headers).
 #
-# Options (default ON): RIVE_WITH_TEXT (HarfBuzz + SheenBidi) and
-# RIVE_WITH_LAYOUT (Yoga). Built without audio (miniaudio) and scripting
-# (Luau). Disabled features are compiled out by the runtime's own WITH_RIVE_*
+# Options (default ON): RIVE_WITH_TEXT (HarfBuzz + SheenBidi),
+# RIVE_WITH_LAYOUT (Yoga) and RIVE_WITH_AUDIO (miniaudio, external engine:
+# the app pulls mixed PCM itself). Built without scripting (Luau). Disabled features are compiled out by the runtime's own WITH_RIVE_*
 # guards, so every .cpp can be globbed in. Dependency versions and build
 # settings follow rive-runtime/dependencies/premake5_*_v2.lua, without the
 # symbol renames (only needed when an app links a second HarfBuzz / Yoga).
@@ -40,6 +40,9 @@ if(NOT DEFINED RIVE_WITH_TEXT)
 endif()
 if(NOT DEFINED RIVE_WITH_LAYOUT)
     set(RIVE_WITH_LAYOUT ON)
+endif()
+if(NOT DEFINED RIVE_WITH_AUDIO)
+    set(RIVE_WITH_AUDIO ON)
 endif()
 
 # Text: HarfBuzz (shaping, rive-app/harfbuzz@rive_13.1.1) and SheenBidi
@@ -145,4 +148,36 @@ if(RIVE_WITH_LAYOUT)
     # The patched header directory must come before Yoga's own.
     list(APPEND RIVE_PUBLIC_INCS ${RIVE_YOGA_PATCHED_INC} "${YOGA_DIR}")
     list(APPEND RIVE_PUBLIC_DEFINES WITH_RIVE_LAYOUT)
+endif()
+
+# Audio: miniaudio (decoding + mixing, rive-app/miniaudio@rive_changes_11),
+# as rive-runtime's `--with_rive_audio=external`: no device I/O, the app
+# pulls mixed frames with AudioEngine::readAudioFrames and plays them itself.
+# The MA_* defines change miniaudio's struct layouts, so they are public and
+# must match between miniaudio.c and Rive.
+if(RIVE_WITH_AUDIO)
+    set(MINIAUDIO_DIR "${RIVE_DEPS_DIR}/miniaudio")
+    if(NOT EXISTS "${MINIAUDIO_DIR}/miniaudio.c")
+        message(FATAL_ERROR
+            "miniaudio not found in ${RIVE_DEPS_DIR}.\n"
+            "Run: tools/setup_submodules (sh or ps1)")
+    endif()
+    set(RIVE_MINIAUDIO_SRCS "${MINIAUDIO_DIR}/miniaudio.c")
+    list(APPEND RIVE_SRCS ${RIVE_MINIAUDIO_SRCS})
+    # No dlopen (no device backends to load). ESP-IDF's pthreads lack the
+    # scheduling-policy attributes miniaudio uses for device threads (none
+    # are created here): miniaudio_esp_shim.h stubs them.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Generic")
+        set_source_files_properties(${RIVE_MINIAUDIO_SRCS} PROPERTIES
+            COMPILE_DEFINITIONS MA_NO_RUNTIME_LINKING
+            COMPILE_OPTIONS "-include;${CMAKE_CURRENT_LIST_DIR}/miniaudio_esp_shim.h")
+    endif()
+    list(APPEND RIVE_PUBLIC_INCS "${MINIAUDIO_DIR}")
+    # RISC-V newlib: uint32_t is unsigned long, miniaudio wants ma_uint32*.
+    patch_source(RIVE_SRCS "${RIVE_DIR}/src/audio/audio_engine.cpp"
+        "uint32_t channelCount = channels\\(\\)<SEMI>"
+        "ma_uint32 channelCount = channels()<SEMI>")
+    list(APPEND RIVE_PUBLIC_DEFINES
+        WITH_RIVE_AUDIO EXTERNAL_RIVE_AUDIO_ENGINE
+        MA_NO_DEVICE_IO MA_NO_RESOURCE_MANAGER MA_NO_ENCODING MA_NO_GENERATION)
 endif()

@@ -13,8 +13,12 @@
 // keep both cores equally busy.
 #include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstdint>
 
+#if CONFIG_RIVE_AUDIO_OUT
+#include "audio_p4.h"
+#endif
 #include "display_p4.h"
 #include "pie_selftest.h"
 #include "raster_profile.h"
@@ -142,6 +146,11 @@ static void rive_task(void*)
   {
     ESP_LOGW(TAG, "touch unavailable");
   }
+#if CONFIG_RIVE_AUDIO_OUT
+  // Before the file loads, so its audio events find the engine. The audio
+  // task runs on core 0 next to lane 1; it needs ~2% of a core.
+  audio_start(0);
+#endif
 
   // Render targets: two premultiplied ARGB8888 frames in PSRAM, used
   // alternately. Each keeps its contents between uses (needed for partial
@@ -263,6 +272,9 @@ static void rive_task(void*)
         case TOUCH_UP:
           ESP_LOGI(TAG, "touch up at %u,%u", touch.x, touch.y);
           player.pointerUp(tx, ty);
+          // The finger is gone: leave, so the next touch enters again
+          // (hover listeners, e.g. sound.riv's, fire on every tap).
+          player.pointerExit(tx, ty);
           break;
       }
     }
@@ -398,6 +410,19 @@ static void rive_task(void*)
         ESP_LOGI(TAG, "  split moved %d time(s)", moves);
       }
       raster_profile_report(TAG, frames_);
+#if CONFIG_RIVE_AUDIO_OUT
+      {
+        const audio_stats_t a = audio_take_stats();
+        ESP_LOGI(TAG, "  audio: peak %s%.0f dBFS | mix %.2f ms per %.1f ms "
+                 "block (%.1f%% of a core) | stack %u of %u KB free%s",
+                 a.peak > 0.0f ? "" : "< ",
+                 a.peak > 0.0f ? 20.0f * log10f(a.peak) : -90.0f,
+                 a.mixMs, 256.0f * 1000.0f / CONFIG_RIVE_AUDIO_SAMPLE_RATE,
+                 a.cpuPercent, unsigned(a.stackFree / 1024),
+                 unsigned(a.stackSize / 1024),
+                 a.codec ? "" : " | no codec");
+      }
+#endif
       frames_ = rebuilds = moves = copies = 0;
       sumAdvance = sumBuild = sumRender = sumBlitWait = sumVsync = sumDirty =
           sumCopied = sumCopyMs = 0;

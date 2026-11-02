@@ -9,6 +9,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 0.5.3
+  espressif/esp_codec_dev:
+    component_hash: 4779f31a3ba3f9b38aee1afe6ccb9ba8f6108dc3a6e77d39d7d714e9a215371b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.6.2
   idf:
     source:
       type: idf
@@ -30,8 +40,9 @@ dependencies:
     - esp32p4
     version: 2.0.0
 direct_dependencies:
+- espressif/esp_codec_dev
 - idf
 - waveshare/esp_lcd_st7703
-manifest_hash: 269898d7d7c6a9afebbbbebef520e9e7b01a23b081dffbfa1b0fc17f7931c5e1
+manifest_hash: 990d0880faae178e68a32c8b7fab40071c6ec07be7c045b99671841728672f6e
 target: esp32p4
 version: 2.0.0

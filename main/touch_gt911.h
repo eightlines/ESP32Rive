@@ -1,6 +1,6 @@
 // Goodix GT911 touch controller on the Waveshare ESP32-P4-WIFI6-Touch-LCD-4B.
 //
-// The board wires the GT911 to I2C (SDA GPIO 7, SCL GPIO 8) without its INT
+// The board wires the GT911 to the shared I2C bus (board_i2c.h) without its INT
 // or RESET lines, so the controller is polled. A small task reads the first
 // touch point and turns it into down / move / up events in panel pixels
 // (0..719), which the render loop drains with touch_next_event().

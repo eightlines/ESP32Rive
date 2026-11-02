@@ -15,4 +15,13 @@ menu "Rive runtime"
             Builds Rive's layout engine (Yoga flexbox). Without it, layout
             components keep their unlaid-out positions.
 
+    config RIVE_AUDIO
+        bool "Audio (miniaudio)"
+        default y
+        help
+            Builds Rive's audio engine (miniaudio: MP3 / WAV / FLAC / Vorbis
+            decoding and mixing) so audio events in a .riv play. Built as
+            an external engine: no audio device inside miniaudio; the app
+            pulls mixed samples (see Rive player > Audio output).
+
 endmenu
