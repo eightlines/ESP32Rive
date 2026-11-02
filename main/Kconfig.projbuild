@@ -1,0 +1,85 @@
+menu "Rive player"
+
+    config RIVE_RENDER_HALF_RES
+        bool "Render at 360x360 and upscale 2x with the PPA"
+        default n
+        help
+            Rasterise the animation at half resolution (a quarter of the
+            pixels) and let the P4's pixel-processing accelerator scale it up
+            to the 720x720 panel. Much faster, slightly softer edges.
+
+    config RIVE_DUAL_CORE
+        bool "Render on both CPU cores"
+        default y
+        help
+            Split the frame into a top and a bottom half, rendered in
+            parallel: the top on core 1 (the Rive task), the bottom on core 0
+            (a worker task). Each half has its own ThorVG canvas.
+
+    config RIVE_LANE_CULLING
+        bool "Skip draws outside each core's half"
+        default y
+        depends on RIVE_DUAL_CORE
+        help
+            Each lane uses an empty placeholder for draws whose bounds don't
+            reach its rows, so it neither builds nor prepares them.
+
+    config RIVE_IN_PLACE_UPDATES
+        bool "Update changed shapes in place"
+        default y
+        help
+            A draw whose path, transform or fill changed updates its existing
+            ThorVG shape instead of getting a new one: no allocations, and
+            ThorVG keeps what it can (a moved gradient keeps its colour
+            table, a recoloured shape its coverage spans). Pixel-identical.
+            Turn off to compare.
+
+    config RIVE_PPA_BURST_SWEEP
+        bool "Experiment: sweep the PPA burst length"
+        default n
+        help
+            Cycles the PPA's DMA burst length through 128, 64, 32, 16 and 8
+            bytes, two stats intervals each, and logs the active value. Use
+            it to find the best trade-off between the background copy's
+            speed and its memory contention with rendering. Measured on
+            2026-11-01: 128 is best (shorter bursts only slow the copy and
+            don't speed up rendering), so it stays off.
+
+    config RIVE_RASTER_PROFILE
+        bool "Experiment: profile ThorVG raster functions"
+        default y
+        help
+            Wraps ThorVG's raster and span-preparation functions with cycle
+            counters (linker --wrap) and logs, per core, how many ms per
+            frame each one takes. Small overhead per call.
+
+    config RIVE_PIE_GRADIENT
+        bool "Use PIE (SIMD) for translucent gradient spans"
+        default y
+        depends on RIVE_THORVG_FAST_GRADIENT
+        help
+            Blends translucent linear-gradient spans 4 pixels at a time with
+            the ESP32-P4's PIE vector instructions. At boot a self-test
+            compares it with ThorVG's own loop on random data and logs the
+            cycles per pixel of each; the PIE version is only used if it
+            matched exactly.
+
+    config RIVE_PARTIAL_REDRAW
+        bool "Redraw only changed regions"
+        default y
+        help
+            Keep ThorVG's shapes between frames and let it redraw only the
+            screen regions whose content changed (ThorVG SmartRender). Only
+            the changed rows are then copied to the panel. Animations that
+            move everything every frame gain nothing, but don't lose much.
+
+    config RIVE_BACKLIGHT_PERCENT
+        int "Backlight brightness (%)"
+        range 0 100
+        default 100
+
+    config RIVE_STATS_INTERVAL_MS
+        int "Interval between FPS / timing log lines (ms)"
+        default 2000
+
+endmenu
