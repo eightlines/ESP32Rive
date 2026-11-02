@@ -1,0 +1,18 @@
+# Experiment (CONFIG_RIVE_THORVG_HOT_IRAM): run ThorVG's hottest raster code
+# from internal RAM instead of executing it from PSRAM through the caches.
+# About 17 KB: the outline-to-coverage rasteriser (rleRender and its
+# helpers) and the gradient / solid span loops. Section names are the
+# mangled C++ symbols (compiled with -ffunction-sections).
+[mapping:thorvg_hot]
+archive: libthorvg.a
+entries:
+    if RIVE_THORVG_HOT_IRAM = y:
+        tvgSwRle:_Z9rleRenderP5SwRlePK9SwOutlineRKN3tvg12RenderRegionEP7SwMpooljb (noflash)
+        tvgSwRle:_ZL7_lineToR9RleWorkerRK7SwPoint (noflash)
+        tvgSwRle:_ZL10_horizLineR9RleWorkerllll (noflash)
+        tvgSwRle:_ZL11_recordCellR9RleWorker (noflash)
+        tvgSwFill:_Z12fillRasterOpPK6SwFillPmmmm8SwFastOph (noflash)
+        tvgSwFill:_ZN12_GLOBAL__N_120_padSpanPreNormalPieEPKmPmmll (noflash)
+        tvgSwRasterCore:_Z19cRasterSolidPixel32Pmmml (noflash)
+        tvgSwRasterCore:_Z18cRasterSolidPixelsPmS_mh (noflash)
+        tvgSwRasterCore:_Z21cRasterTranslucentRleP9SwSurfacePK5SwRleRKN3tvg12RenderRegionERKNS4_4RGBAE (noflash)

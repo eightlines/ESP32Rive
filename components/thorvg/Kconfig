@@ -1,0 +1,57 @@
+menu "ThorVG"
+
+    config RIVE_THORVG_THREADS
+        bool "Enable ThorVG task scheduler threads"
+        default n
+        help
+            Builds ThorVG with its std::thread based task scheduler. Not
+            used by this project: both cores are already used by rendering
+            the frame in two lanes (Rive player -> Render on both CPU cores),
+            and the player starts ThorVG without worker threads. Leave off.
+
+    config RIVE_THORVG_FAST_GRADIENT
+        bool "Faster linear-gradient spans"
+        default y
+        help
+            Replaces ThorVG's per-pixel blend-operator call and spread-mode
+            switch in linear-gradient spans with loops specialised per
+            operator (components/thorvg/fast). Pixel-identical output.
+            Turn off to compare against stock ThorVG.
+
+    config RIVE_THORVG_SKIP_PARTIAL_CLEAR
+        bool "Skip the dirty-region clear under an opaque background"
+        default y
+        help
+            With partial redraw, ThorVG clears each changed region before
+            redrawing it. The Rive player always draws an opaque full-frame
+            background first, so that clear is redundant memory traffic.
+            Pixel-identical output. Only applies while the clear colour is
+            opaque.
+
+    config RIVE_THORVG_RLE_CELL_PERCENT
+        int "Scanline cell buffer size (% of ThorVG's default)"
+        range 75 800
+        default 200
+        help
+            ThorVG converts each shape outline to coverage spans in
+            horizontal bands sized to fit a cell buffer of max(w, h) * 0.75
+            cells. A band that needs more cells is discarded, halved and
+            redone. 200 (twice the default size) avoids almost all of those
+            restarts at 720x720 (about 20% less span-generation work), for
+            about 29 KB per render lane (in PSRAM). Output is identical.
+            75 = stock ThorVG.
+
+    config RIVE_THORVG_HOT_IRAM
+        bool "Experiment: run hot raster code from internal RAM"
+        default n
+        help
+            Places ThorVG's hottest raster functions (the outline
+            rasteriser and the gradient / solid span loops, about 17 KB) in
+            IRAM instead of executing them from PSRAM through the caches
+            (components/thorvg/linker.lf). Costs that much internal RAM,
+            which is scarce once an animation is loaded. Measured on the
+            car at 720 (2026-11-02): 14.4-14.5 fps off, 14.6 on, shape RLE
+            and fill within 1-2% (the hot loops already stay in the
+            instruction cache), so it's off by default.
+
+endmenu
