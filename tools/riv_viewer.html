@@ -1,0 +1,204 @@
+<!doctype html>
+<!--
+  Reference viewer for .riv files, using Rive's official web runtime.
+  Renders at 720x720 with Fit.Contain / centred, the same framing as the
+  ESP32-P4 player, so the board can be compared against it side by side.
+
+  Open this file directly in a browser (double-click). It needs internet
+  access to load the Rive runtime from unpkg; the .riv itself never leaves
+  your machine.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rive Reference Viewer</title>
+<style>
+  :root {
+    --bg: #15171a; --panel: #1f2226; --fg: #e8eaed; --muted: #9aa0a6;
+    --accent: #4fb3ff; --line: #33373c;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px;
+         display: grid; grid-template-columns: minmax(0, 720px) minmax(0, 1fr); gap: 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .stage { position: relative; width: 100%; max-width: 720px; aspect-ratio: 1;
+           background: #000; border: 1px solid var(--line); }
+  .stage canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+  .stage.drag { outline: 2px dashed var(--accent); outline-offset: -8px; }
+  .hint { position: absolute; inset: 0; display: grid; place-items: center;
+          color: var(--muted); text-align: center; padding: 24px; pointer-events: none; }
+  aside { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  h1 { font-size: 18px; margin: 0; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  select, button, input[type=color] {
+    font: inherit; color: var(--fg); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+  button { cursor: pointer; }
+  button:hover, select:hover { border-color: var(--accent); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .log { font: 12px ui-monospace, Consolas, monospace; color: var(--muted);
+         max-height: 180px; overflow: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <div class="stage" id="stage">
+    <canvas id="cv" width="720" height="720"></canvas>
+    <div class="hint" id="hint">Drop a .riv file here<br>or use “Open .riv…”</div>
+  </div>
+  <aside>
+    <h1>Rive reference viewer</h1>
+    <div class="row">
+      <button id="open">Open .riv…</button>
+      <input type="file" id="file" accept=".riv" hidden>
+      <button id="restart" disabled>Restart</button>
+      <button id="pause" disabled>Pause</button>
+      <button id="png" disabled>Save PNG</button>
+    </div>
+    <label for="artboard">Artboard
+      <select id="artboard" disabled></select></label>
+    <label for="sm">State machine / animation
+      <select id="sm" disabled></select></label>
+    <label for="fit">Fit
+      <select id="fit">
+        <option value="contain" selected>Contain (same as the board)</option>
+        <option value="cover">Cover</option>
+        <option value="fill">Fill</option>
+        <option value="layout">Layout (artboard resized to 720×720)</option>
+      </select></label>
+    <dl>
+      <dt>File</dt><dd id="i-file">–</dd>
+      <dt>Artboard size</dt><dd id="i-size">–</dd>
+      <dt>Frame rate</dt><dd id="i-fps">–</dd>
+      <dt>Runtime</dt><dd id="i-rt">@rive-app/canvas 2.37.2</dd>
+    </dl>
+    <div class="log" id="log"></div>
+  </aside>
+</main>
+
+<script src="https://unpkg.com/@rive-app/canvas@2.37.2/rive.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const cv = $('cv'), stage = $('stage');
+  let r = null, bytes = null, fileName = '', paused = false;
+
+  const log = msg => { $('log').textContent += msg + '\n'; $('log').scrollTop = 1e9; };
+
+  if (!window.rive) { log('Could not load the Rive runtime from unpkg (offline?).'); return; }
+
+  const fitOf = v => ({ contain: rive.Fit.Contain, cover: rive.Fit.Cover,
+                        fill: rive.Fit.Fill, layout: rive.Fit.Layout }[v]);
+
+  function load(artboard, playName) {
+    if (r) { r.cleanup(); r = null; }
+    const playIsAnim = playName && playName.startsWith('anim:');
+    const name = playName ? playName.replace(/^(sm|anim):/, '') : undefined;
+    r = new rive.Rive({
+      buffer: bytes.slice(0),
+      canvas: cv,
+      artboard,
+      stateMachines: playIsAnim ? undefined : name,
+      animations: playIsAnim ? name : undefined,
+      autoplay: true,
+      autoBind: true,
+      layout: new rive.Layout({ fit: fitOf($('fit').value), alignment: rive.Alignment.Center }),
+      onLoad: () => {
+        r.resizeDrawingSurfaceToCanvas();
+        if (!artboard) fillMenus();
+        const b = r.bounds;
+        $('i-size').textContent = `${Math.round(b.maxX - b.minX)} × ${Math.round(b.maxY - b.minY)}`;
+        log(`loaded artboard "${r.activeArtboard}", playing ${r.playingStateMachineNames.concat(r.playingAnimationNames).join(', ') || '(nothing)'}`);
+        for (const b of ['restart', 'pause', 'png']) $(b).disabled = false;
+      },
+      onLoadError: e => log('load error: ' + (e && e.data || e)),
+      onStateChange: e => log('state: ' + [].concat(e.data).join(', ')),
+    });
+  }
+
+  function fillMenus() {
+    const contents = r.contents;
+    const abSel = $('artboard'); abSel.innerHTML = '';
+    contents.artboards.forEach(ab => abSel.add(new Option(ab.name, ab.name)));
+    abSel.value = r.activeArtboard; abSel.disabled = false;
+    fillPlayMenu(r.activeArtboard);
+  }
+
+  function fillPlayMenu(abName) {
+    const ab = r.contents.artboards.find(a => a.name === abName);
+    const sel = $('sm'); sel.innerHTML = '';
+    ab.stateMachines.forEach(s => sel.add(new Option('State machine: ' + s.name, 'sm:' + s.name)));
+    ab.animations.forEach(a => sel.add(new Option('Animation: ' + a, 'anim:' + a)));
+    const playing = r.playingStateMachineNames[0];
+    if (playing) sel.value = 'sm:' + playing;
+    sel.disabled = sel.options.length === 0;
+  }
+
+  async function openFile(f) {
+    bytes = new Uint8Array(await f.arrayBuffer());
+    fileName = f.name;
+    $('i-file').textContent = `${f.name} (${bytes.length.toLocaleString()} bytes)`;
+    $('hint').hidden = true;
+    $('log').textContent = '';
+    paused = false; $('pause').textContent = 'Pause';
+    const first = new rive.Rive({ buffer: bytes.slice(0), canvas: document.createElement('canvas'),
+      autoplay: false, onLoad: () => {
+        // Same choice as the board: default artboard, its first state machine.
+        const ab = first.contents.artboards.find(a => a.name === first.activeArtboard) || first.contents.artboards[0];
+        const sm = ab.stateMachines[0];
+        const play = sm ? 'sm:' + sm.name : (ab.animations[0] ? 'anim:' + ab.animations[0] : undefined);
+        first.cleanup();
+        load(undefined, play);
+      }, onLoadError: e => log('load error: ' + (e && e.data || e)) });
+  }
+
+  $('open').onclick = () => $('file').click();
+  $('file').onchange = e => e.target.files[0] && openFile(e.target.files[0]);
+  stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('drag'); });
+  stage.addEventListener('dragleave', () => stage.classList.remove('drag'));
+  stage.addEventListener('drop', e => {
+    e.preventDefault(); stage.classList.remove('drag');
+    const f = e.dataTransfer.files[0]; if (f) openFile(f);
+  });
+
+  $('artboard').onchange = e => {
+    const ab = r.contents.artboards.find(a => a.name === e.target.value);
+    const play = ab.stateMachines[0] ? 'sm:' + ab.stateMachines[0].name
+               : ab.animations[0] ? 'anim:' + ab.animations[0] : undefined;
+    load(e.target.value, play);
+    // menus are refreshed for the new artboard once loaded
+    setTimeout(() => r && fillPlayMenu(e.target.value), 300);
+  };
+  $('sm').onchange = e => load($('artboard').value, e.target.value);
+  $('fit').onchange = () => { if (r) r.layout = new rive.Layout({ fit: fitOf($('fit').value), alignment: rive.Alignment.Center }); };
+  $('restart').onclick = () => load($('artboard').value, $('sm').value);
+  $('pause').onclick = () => {
+    if (!r) return;
+    paused = !paused;
+    paused ? r.pause() : r.play();
+    $('pause').textContent = paused ? 'Play' : 'Pause';
+  };
+  $('png').onclick = () => {
+    const a = document.createElement('a');
+    a.download = fileName.replace(/\.riv$/, '') + '_reference.png';
+    a.href = cv.toDataURL('image/png');
+    a.click();
+  };
+
+  // Simple fps readout, comparable to the board's log.
+  let frames = 0, t0 = performance.now();
+  (function tick(t) {
+    frames++;
+    if (t - t0 >= 1000) { $('i-fps').textContent = `${(frames * 1000 / (t - t0)).toFixed(1)} fps (browser)`; frames = 0; t0 = t; }
+    requestAnimationFrame(tick);
+  })(t0);
+})();
+</script>
+</body>
+</html>
