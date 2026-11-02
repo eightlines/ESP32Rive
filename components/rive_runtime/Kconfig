@@ -1,0 +1,18 @@
+menu "Rive runtime"
+
+    config RIVE_TEXT
+        bool "Text (HarfBuzz + SheenBidi)"
+        default y
+        help
+            Builds Rive's text engine with HarfBuzz (shaping) and SheenBidi
+            (bidirectional text). Fonts are embedded in the .riv file; glyphs
+            are drawn as ordinary paths. Adds roughly 1 MB of code.
+
+    config RIVE_LAYOUT
+        bool "Layouts (Yoga)"
+        default y
+        help
+            Builds Rive's layout engine (Yoga flexbox). Without it, layout
+            components keep their unlaid-out positions.
+
+endmenu

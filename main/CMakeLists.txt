@@ -1,3 +1,14 @@
+# The .riv chosen in menuconfig (Rive player -> Embedded .riv file) is
+# copied to a fixed name, so the embedded symbol is always
+# _binary_rive_file_riv_start whichever file it is.
+if(CONFIG_RIVE_EMBEDDED_FILE_NAME)
+    set(RIVE_FILE_NAME "${CONFIG_RIVE_EMBEDDED_FILE_NAME}")
+else()
+    set(RIVE_FILE_NAME "sample.riv") # requirements scan: no sdkconfig yet
+endif()
+configure_file("${CMAKE_CURRENT_LIST_DIR}/assets/${RIVE_FILE_NAME}"
+               "${CMAKE_CURRENT_BINARY_DIR}/rive_file.riv" COPYONLY)
+
 idf_component_register(
     SRCS
         "main.cpp"
@@ -7,7 +18,7 @@ idf_component_register(
         "touch_gt911.c"
     INCLUDE_DIRS "."
     REQUIRES rive_thorvg esp_lcd esp_driver_ppa esp_driver_ledc esp_driver_i2c esp_timer
-    EMBED_FILES "assets/sample.riv"
+    EMBED_FILES "${CMAKE_CURRENT_BINARY_DIR}/rive_file.riv"
 )
 
 # On-device ThorVG profiling: route ThorVG's raster / preparation calls

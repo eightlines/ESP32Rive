@@ -6,7 +6,7 @@
 #   cmake --build build-host
 #   ./build-host/rive_host_render main/assets/sample.riv out 10 30 720 2 1
 cmake_minimum_required(VERSION 3.16)
-project(rive_host_render CXX)
+project(rive_host_render C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,8 +24,8 @@ target_compile_options(thorvg PRIVATE -fno-exceptions -fno-rtti -w)
 
 add_library(rive STATIC ${RIVE_SRCS})
 target_include_directories(rive PUBLIC ${RIVE_PUBLIC_INCS})
-target_compile_definitions(rive PRIVATE ${RIVE_DEFINES})
-target_compile_options(rive PRIVATE -fno-exceptions -fno-rtti -w)
+target_compile_definitions(rive PRIVATE ${RIVE_DEFINES} PUBLIC ${RIVE_PUBLIC_DEFINES})
+target_compile_options(rive PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti> -w)
 
 file(GLOB ADAPTER_SRCS "${ROOT}/components/rive_thorvg/src/*.cpp")
 add_library(rive_thorvg STATIC ${ADAPTER_SRCS})

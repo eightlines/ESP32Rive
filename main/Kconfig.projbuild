@@ -1,5 +1,27 @@
 menu "Rive player"
 
+    choice RIVE_EMBEDDED_FILE
+        prompt "Embedded .riv file"
+        default RIVE_FILE_CAR
+        help
+            Which test file from main/assets is built into the firmware.
+
+        config RIVE_FILE_CAR
+            bool "Off-road car (animation, gradients, clips)"
+        config RIVE_FILE_BUTTON
+            bool "Electrified button (state machine, touch, text)"
+            depends on RIVE_TEXT
+        config RIVE_FILE_SCROLL
+            bool "Scroll snap (layouts, text, touch scrolling)"
+            depends on RIVE_TEXT && RIVE_LAYOUT
+    endchoice
+
+    config RIVE_EMBEDDED_FILE_NAME
+        string
+        default "sample.riv" if RIVE_FILE_CAR
+        default "electrified_button.riv" if RIVE_FILE_BUTTON
+        default "scroll_snap.riv" if RIVE_FILE_SCROLL
+
     config RIVE_RENDER_HALF_RES
         bool "Render at 360x360 and upscale 2x with the PPA"
         default n
