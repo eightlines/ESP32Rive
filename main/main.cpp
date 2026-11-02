@@ -1,4 +1,4 @@
-// Plays an embedded Rive animation (main/assets/sample.riv) on the Waveshare
+// Plays an embedded Rive file (chosen in menuconfig from main/assets) on the Waveshare
 // ESP32-P4-WIFI6-Touch-LCD-4B 720x720 display.
 //
 // Per frame N:
@@ -30,8 +30,9 @@
 
 static const char* TAG = "rive";
 
-extern const uint8_t sample_riv_start[] asm("_binary_sample_riv_start");
-extern const uint8_t sample_riv_end[] asm("_binary_sample_riv_end");
+// The .riv chosen in menuconfig, embedded under a fixed name (CMakeLists.txt).
+extern const uint8_t rive_file_start[] asm("_binary_rive_file_riv_start");
+extern const uint8_t rive_file_end[] asm("_binary_rive_file_riv_end");
 
 #if CONFIG_RIVE_RENDER_HALF_RES
 static constexpr int kRenderSize = DISPLAY_WIDTH / 2;
@@ -181,14 +182,15 @@ static void rive_task(void*)
     xSemaphoreTake(worker.done, portMAX_DELAY); // lane 1 created
   }
 
-  const size_t rivSize = sample_riv_end - sample_riv_start;
-  ESP_LOGI(TAG, "loading sample.riv (%u bytes): %dx%d, %u lane(s), partial "
+  const size_t rivSize = rive_file_end - rive_file_start;
+  ESP_LOGI(TAG, "loading %s (%u bytes): %dx%d, %u lane(s), partial "
            "redraw %s",
-           unsigned(rivSize), kRenderSize, kRenderSize, unsigned(kLanes),
+           CONFIG_RIVE_EMBEDDED_FILE_NAME, unsigned(rivSize), kRenderSize,
+           kRenderSize, unsigned(kLanes),
            kPartial ? "on" : "off");
-  if (!player.load(sample_riv_start, rivSize))
+  if (!player.load(rive_file_start, rivSize))
   {
-    ESP_LOGE(TAG, "could not load sample.riv");
+    ESP_LOGE(TAG, "could not load %s", CONFIG_RIVE_EMBEDDED_FILE_NAME);
     vTaskDelete(nullptr);
     return;
   }
@@ -250,6 +252,9 @@ static void rive_task(void*)
       {
         case TOUCH_DOWN:
           ESP_LOGI(TAG, "touch down at %u,%u", touch.x, touch.y);
+          // A finger has no hover: move there first so listeners see the
+          // pointer enter before the press, as they would with a mouse.
+          player.pointerMove(tx, ty);
           player.pointerDown(tx, ty);
           break;
         case TOUCH_MOVE:

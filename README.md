@@ -48,11 +48,11 @@ Rive's own renderers all need a GPU, and the P4 doesn't have one.
 
 | Path | What |
 |---|---|
-| `main/` | App: display init (`display_p4.c`), playback loop (`main.cpp`), embedded `assets/sample.riv` |
+| `main/` | App: display init (`display_p4.c`), playback loop (`main.cpp`), test files in `assets/` (one is embedded, chosen in menuconfig) |
 | `components/rive_thorvg/` | Rive → ThorVG adapter: `ThorvgFactory`, `ThorvgRenderer` (records draws), `ThorvgLane` (retained ThorVG canvas per core), `RivePlayer` |
 | `components/rive_runtime/` | ESP-IDF build wrapper for `third_party/rive-runtime` |
 | `components/thorvg/` | ESP-IDF build wrapper for `third_party/thorvg` (software engine + PNG/JPG/WebP loaders), plus build-time patches in `fast/` (see below) |
-| `third_party/` | Git submodules: rive-runtime (`runtime-v0.1.675`) and ThorVG (`v1.1.3`) |
+| `third_party/` | Git submodules: rive-runtime (`runtime-v0.1.675`), ThorVG (`v1.1.3`), and for text and layouts the versions rive-runtime pins: HarfBuzz (`rive-app/harfbuzz@rive_13.1.1`), SheenBidi (`v2.6`), Yoga (`rive-app/yoga@rive_yoga_dee88d2dfcad`) |
 | `host/` | Desktop build of the same code that renders `.riv` frames to image files |
 | `tools/` | Submodule setup scripts |
 | `components/patch_source.cmake` | Applies small fixes / hooks to upstream files at build time (see below) |
@@ -156,7 +156,16 @@ I (5124) rive:   lane 1 (core 0, rows 400-720): 129.8 ms = apply 13.1 + prep 45.
 
 ## Using your own animation
 
-Replace `main/assets/sample.riv` with your file and rebuild. The artboard is
+Three test files are included; pick one in `idf.py menuconfig` → Rive
+player → **Embedded .riv file**:
+
+- **Off-road car** (`sample.riv`, default): animation, gradients, clips
+- **Electrified button** (`electrified_button.riv`): state machine with
+  pointer listeners and text. Tap it.
+- **Scroll snap** (`scroll_snap.riv`): text in layouts, touch scrolling
+
+To use your own file, replace `main/assets/sample.riv` with it (or add it
+and a choice in `main/Kconfig.projbuild`) and rebuild. The artboard is
 scaled to fit the 720×720 screen (`Fit::contain`, centred), so a 720×720
 artboard maps 1:1. The player runs the artboard's default state machine. If
 there isn't one, it uses the first state machine, and failing that, the first
@@ -259,12 +268,16 @@ Working:
 - Opacity
 - Bitmap images (PNG, JPEG, WebP)
 - Animations, state machines
-- Pointer input: GT911 touch is forwarded to the state machine (down, move,
-  up). Animations without a state machine ignore it; touches are logged.
+- Pointer input: GT911 touch is forwarded to the state machine (move to the
+  touch point, down, move, up). Animations without a state machine ignore
+  it; touches are logged.
+- **Text** (HarfBuzz + SheenBidi, fonts embedded in the `.riv`): glyphs are
+  drawn as ordinary paths. menuconfig → Rive runtime → Text
+- **Layouts** (Yoga). menuconfig → Rive runtime → Layouts
 
 Not yet:
-- **Text**: needs HarfBuzz/SheenBidi, compiled out to save flash
-- **Layouts**: needs Yoga, compiled out
+- **Hosted assets**: fonts or images stored outside the `.riv` (on Rive's
+  CDN or as separate files) aren't loaded
 - **Scripting** (Luau) and **audio**: compiled out
 - **Mesh-deformed images**: ThorVG has no textured-triangle API. A warning is
   logged once.
@@ -275,7 +288,7 @@ Not yet:
 
 ## Next steps
 
-- Test touch with a `.riv` that has a state machine with pointer listeners
+- Load hosted assets (fonts / images referenced outside the `.riv`)
 - Report the two partial-redraw bugs (unclipped gradient spans, no damage on
   paint removal) and the `EngineOption::Default` includes SmartRender
   surprise to ThorVG
@@ -285,5 +298,6 @@ Not yet:
 ## Licences
 
 Project code: MIT (see `LICENSE`). Rive runtime: MIT. ThorVG: MIT.
-`main/assets/sample.riv` is the `off_road_car.riv` test asset from the
-rive-runtime repository.
+HarfBuzz: MIT ("Old MIT"). SheenBidi: Apache 2.0. Yoga: MIT. The files in
+`main/assets/` are test assets from the rive-runtime repository
+(`off_road_car.riv`, `electrified_button_simple.riv`, `scroll_snap.riv`).
