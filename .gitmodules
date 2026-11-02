@@ -13,3 +13,6 @@
 [submodule "third_party/yoga"]
 	path = third_party/yoga
 	url = https://github.com/rive-app/yoga.git
+[submodule "third_party/miniaudio"]
+	path = third_party/miniaudio
+	url = https://github.com/rive-app/miniaudio.git

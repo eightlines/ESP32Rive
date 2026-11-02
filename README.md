@@ -3,7 +3,8 @@
 Plays [Rive](https://rive.app) animations on an ESP32-P4 using the official
 [Rive C++ runtime](https://github.com/rive-app/rive-runtime) and the
 [ThorVG](https://github.com/thorvg/thorvg) software vector rasteriser, on the
-**Waveshare ESP32-P4-WIFI6-Touch-LCD-4B** (720×720 MIPI-DSI display).
+**Waveshare ESP32-P4-WIFI6-Touch-LCD-4B** / **ESP32-P4-86-Panel-ETH-2RO**
+(720×720 MIPI-DSI display, GT911 touch, ES8311 audio codec).
 
 ## How it works
 
@@ -52,7 +53,7 @@ Rive's own renderers all need a GPU, and the P4 doesn't have one.
 | `components/rive_thorvg/` | Rive → ThorVG adapter: `ThorvgFactory`, `ThorvgRenderer` (records draws), `ThorvgLane` (retained ThorVG canvas per core), `RivePlayer` |
 | `components/rive_runtime/` | ESP-IDF build wrapper for `third_party/rive-runtime` |
 | `components/thorvg/` | ESP-IDF build wrapper for `third_party/thorvg` (software engine + PNG/JPG/WebP loaders), plus build-time patches in `fast/` (see below) |
-| `third_party/` | Git submodules: rive-runtime (`runtime-v0.1.675`), ThorVG (`v1.1.3`), and for text and layouts the versions rive-runtime pins: HarfBuzz (`rive-app/harfbuzz@rive_13.1.1`), SheenBidi (`v2.6`), Yoga (`rive-app/yoga@rive_yoga_dee88d2dfcad`) |
+| `third_party/` | Git submodules: rive-runtime (`runtime-v0.1.675`), ThorVG (`v1.1.3`), and for text and layouts the versions rive-runtime pins: HarfBuzz (`rive-app/harfbuzz@rive_13.1.1`), SheenBidi (`v2.6`), Yoga (`rive-app/yoga@rive_yoga_dee88d2dfcad`), and for audio miniaudio (`rive-app/miniaudio@rive_changes_11`) |
 | `host/` | Desktop build of the same code that renders `.riv` frames to image files |
 | `tools/` | Submodule setup scripts |
 | `components/patch_source.cmake` | Applies small fixes / hooks to upstream files at build time (see below) |
@@ -156,13 +157,16 @@ I (5124) rive:   lane 1 (core 0, rows 400-720): 129.8 ms = apply 13.1 + prep 45.
 
 ## Using your own animation
 
-Three test files are included; pick one in `idf.py menuconfig` → Rive
+Four test files are included; pick one in `idf.py menuconfig` → Rive
 player → **Embedded .riv file**:
 
 - **Off-road car** (`sample.riv`, default): animation, gradients, clips
 - **Electrified button** (`electrified_button.riv`): state machine with
   pointer listeners and text. Tap it.
 - **Scroll snap** (`scroll_snap.riv`): text in layouts, touch scrolling
+- **Sound** (`sound.riv`): a red square that plays a sound when touched
+  (hover listener + audio event). Needs a speaker on the board's MX1.25
+  header.
 
 To use your own file, replace `main/assets/sample.riv` with it (or add it
 and a choice in `main/Kconfig.projbuild`) and rebuild. The artboard is
@@ -191,6 +195,13 @@ animation.
 - **ThorVG → Faster linear-gradient spans** / **Skip the dirty-region clear**
   / **Scanline cell buffer size**: on by default; turn off (or set the size
   to 75%) to compare with stock ThorVG.
+- **Rive player → Audio output** (default on, needs Rive runtime → Audio):
+  plays Rive's audio through the ES8311 codec and NS4150B amplifier to the
+  2-pin MX1.25 speaker header (8 Ω, 1–3 W speaker, not included with the
+  board). Volume, sample rate (48 kHz) and pins (MCLK 13, BCLK 12, WS 10,
+  DOUT 9, amplifier enable 53; codec on the touch I2C bus at 0x18). The
+  stats line logs the output peak level, so you can see sounds play
+  without a speaker.
 - **Rive player → Backlight brightness**, **stats interval**
 
 ## Performance
@@ -255,6 +266,10 @@ mkdir -p out && ./build-host/rive_host_render main/assets/sample.riv out 30
 # → out/frame_000.ppm … frame_029.ppm (+ average timing per frame)
 # Arguments: <file.riv> <out_dir> [frames=10] [fps=30] [size=720] [lanes=2] [partial=1]
 #            [buffers=2] [balance=1] [cull=1] [bgskip=1] [inplace=1]
+#            [wav=<file>] [tap=x,y,downFrame,upFrame]
+# wav: also mix the file's audio (48 kHz stereo) and write it to a WAV file.
+# tap: one touch at panel pixel x,y, like the board's touch screen, e.g.
+#   ./build-host/rive_host_render main/assets/sound.riv out 120 30 720 2 1 2 1 1 1 1 out/sound.wav 396,180,10,60
 # Lanes beyond the first run on worker threads, like core 0 on the board.
 ```
 
@@ -274,11 +289,17 @@ Working:
 - **Text** (HarfBuzz + SheenBidi, fonts embedded in the `.riv`): glyphs are
   drawn as ordinary paths. menuconfig → Rive runtime → Text
 - **Layouts** (Yoga). menuconfig → Rive runtime → Layouts
+- **Audio** (miniaudio: MP3, WAV, FLAC, Vorbis): audio events play through
+  the speaker header. Rive's engine runs as an "external" engine and a task
+  on core 0 pulls 5 ms blocks from it. Sounds are decoded as they play, from
+  the compressed bytes in the `.riv`. menuconfig → Rive runtime → Audio
+- Touch: a lifted finger also sends a pointer exit, so hover listeners fire
+  on every tap
 
 Not yet:
 - **Hosted assets**: fonts or images stored outside the `.riv` (on Rive's
   CDN or as separate files) aren't loaded
-- **Scripting** (Luau) and **audio**: compiled out
+- **Scripting** (Luau): compiled out
 - **Mesh-deformed images**: ThorVG has no textured-triangle API. A warning is
   logged once.
 - **Feathering** (soft edges): not drawn
@@ -298,6 +319,8 @@ Not yet:
 ## Licences
 
 Project code: MIT (see `LICENSE`). Rive runtime: MIT. ThorVG: MIT.
-HarfBuzz: MIT ("Old MIT"). SheenBidi: Apache 2.0. Yoga: MIT. The files in
+HarfBuzz: MIT ("Old MIT"). SheenBidi: Apache 2.0. Yoga: MIT. miniaudio:
+public domain / MIT-0. esp_codec_dev: Apache 2.0. The files in
 `main/assets/` are test assets from the rive-runtime repository
-(`off_road_car.riv`, `electrified_button_simple.riv`, `scroll_snap.riv`).
+(`off_road_car.riv`, `electrified_button_simple.riv`, `scroll_snap.riv`,
+`sound.riv`).

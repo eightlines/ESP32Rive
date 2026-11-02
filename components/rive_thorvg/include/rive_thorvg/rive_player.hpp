@@ -121,6 +121,9 @@ public:
   void pointerDown(float x, float y);
   void pointerMove(float x, float y);
   void pointerUp(float x, float y);
+  // The pointer left the scene (a finger lifting off a touchscreen), so
+  // the next touch enters again and hover listeners fire again.
+  void pointerExit(float x, float y);
 
 private:
   rive::Vec2D toArtboard(float x, float y) const;

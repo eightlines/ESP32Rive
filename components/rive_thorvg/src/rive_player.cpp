@@ -290,4 +290,12 @@ void RivePlayer::pointerUp(float x, float y)
   }
 }
 
+void RivePlayer::pointerExit(float x, float y)
+{
+  if (m_scene && m_artboard)
+  {
+    m_scene->pointerExit(toArtboard(x, y));
+  }
+}
+
 } // namespace rive_thorvg

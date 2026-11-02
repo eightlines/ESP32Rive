@@ -14,6 +14,9 @@ menu "Rive player"
         config RIVE_FILE_SCROLL
             bool "Scroll snap (layouts, text, touch scrolling)"
             depends on RIVE_TEXT && RIVE_LAYOUT
+        config RIVE_FILE_SOUND
+            bool "Sound (audio event, from rive-runtime's tests)"
+            depends on RIVE_AUDIO
     endchoice
 
     config RIVE_EMBEDDED_FILE_NAME
@@ -21,6 +24,7 @@ menu "Rive player"
         default "sample.riv" if RIVE_FILE_CAR
         default "electrified_button.riv" if RIVE_FILE_BUTTON
         default "scroll_snap.riv" if RIVE_FILE_SCROLL
+        default "sound.riv" if RIVE_FILE_SOUND
 
     config RIVE_RENDER_HALF_RES
         bool "Render at 360x360 and upscale 2x with the PPA"
@@ -103,5 +107,56 @@ menu "Rive player"
     config RIVE_STATS_INTERVAL_MS
         int "Interval between FPS / timing log lines (ms)"
         default 2000
+
+menu "Audio output"
+        depends on RIVE_AUDIO
+
+        config RIVE_AUDIO_OUT
+            bool "Play Rive audio on the board's speaker (ES8311)"
+            default y
+            help
+                Mixes the file's sounds with Rive's audio engine and plays
+                them through the ES8311 codec and NS4150B amplifier to the
+                2-pin MX1.25 speaker header (8 ohm, 1-3 W speaker, not
+                included with the board). A task on core 0 pulls 5 ms
+                blocks and logs the output level, so you can see sounds
+                play without a speaker.
+
+        config RIVE_AUDIO_VOLUME
+            int "Volume (0-100)"
+            range 0 100
+            default 60
+            depends on RIVE_AUDIO_OUT
+
+        config RIVE_AUDIO_SAMPLE_RATE
+            int "Sample rate (Hz)"
+            default 48000
+            depends on RIVE_AUDIO_OUT
+
+        config RIVE_AUDIO_PIN_MCLK
+            int "I2S MCLK GPIO"
+            default 13
+            depends on RIVE_AUDIO_OUT
+        config RIVE_AUDIO_PIN_BCLK
+            int "I2S BCLK (SCLK) GPIO"
+            default 12
+            depends on RIVE_AUDIO_OUT
+        config RIVE_AUDIO_PIN_WS
+            int "I2S WS (LRCK) GPIO"
+            default 10
+            depends on RIVE_AUDIO_OUT
+        config RIVE_AUDIO_PIN_DOUT
+            int "I2S data out GPIO (to ES8311 DSDIN)"
+            default 9
+            depends on RIVE_AUDIO_OUT
+        config RIVE_AUDIO_PIN_PA
+            int "Amplifier enable GPIO (NS4150B, active high)"
+            default 53
+            depends on RIVE_AUDIO_OUT
+            help
+                Pins default to the Waveshare ESP32-P4-86-Panel-ETH-2RO /
+                ESP32-P4-WIFI6-Touch-LCD-4B wiki (I2C for the codec is the
+                touch bus, GPIO 7 / 8). -1 if there is no amplifier pin.
+    endmenu
 
 endmenu
