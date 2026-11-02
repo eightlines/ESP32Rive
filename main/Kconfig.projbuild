@@ -133,6 +133,18 @@ menu "Audio output"
             default 48000
             depends on RIVE_AUDIO_OUT
 
+        config RIVE_AUDIO_BUFFER_SECONDS
+            int "Decode sounds up to this long in advance (s, 0 = never)"
+            range 0 120
+            default 10
+            depends on RIVE_AUDIO_OUT
+            help
+                When the file loads, sounds up to this length are decoded
+                once (and converted to the output's rate) into PSRAM, about
+                188 KB per second at 48 kHz. Playing them then only mixes
+                ready samples. Longer sounds keep being decoded while they
+                play (each playing sound costs ~7% of a core for MP3).
+
         config RIVE_AUDIO_PIN_MCLK
             int "I2S MCLK GPIO"
             default 13

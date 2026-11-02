@@ -4,11 +4,13 @@
 //   rive_host_render <file.riv> <out_dir> [frames=10] [fps=30] [size=720]
 //                    [lanes=2] [partial=1] [buffers=2] [balance=1] [cull=1]
 //                    [bgskip=1] [inplace=1] [wav=<file>] [tap=x,y,f0,f1]
+//                    [predecode=1]
 //
 // wav: with Rive audio built in, mixes the file's sounds at 48 kHz stereo
 // in step with the frames (as the board's audio task does) and writes them
 // to a 16-bit WAV file. tap: a touch like the board's at panel pixel (x, y),
-// down on frame f0 (pointer move + down) and up on frame f1.
+// down on frame f0 (pointer move + down) and up on frame f1. predecode=1
+// decodes the sounds in advance as the board does (prepareAudio).
 // lanes > 1 renders the extra lanes on worker threads, like the board does
 // on its second core. partial=1 enables ThorVG's partial redraw. buffers=2
 // alternates two frame buffers (one ThorVG canvas per buffer per lane), as
@@ -194,6 +196,7 @@ int main(int argc, char** argv)
   {
     std::sscanf(argv[14], "%f,%f,%d,%d", &tapX, &tapY, &tapDown, &tapUp);
   }
+  const bool predecode = argc > 15 ? std::atoi(argv[15]) != 0 : true;
   constexpr uint32_t kAudioRate = 48000, kAudioChannels = 2;
   std::vector<int16_t> wav;
 #ifdef WITH_RIVE_AUDIO
@@ -241,6 +244,12 @@ int main(int argc, char** argv)
     {
       return 1;
     }
+#ifdef WITH_RIVE_AUDIO
+    if (audio && predecode)
+    {
+      player.prepareAudio(kAudioChannels, kAudioRate, 10.0f);
+    }
+#endif
 
     double totalBuild = 0, totalAdvance = 0, totalLane0 = 0, totalDirty = 0;
     int rebuilds = 0, moves = 0;

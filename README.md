@@ -201,7 +201,8 @@ animation.
   board). Volume, sample rate (48 kHz) and pins (MCLK 13, BCLK 12, WS 10,
   DOUT 9, amplifier enable 53; codec on the touch I2C bus at 0x18). The
   stats line logs the output peak level, so you can see sounds play
-  without a speaker.
+  without a speaker. **Decode sounds up to N s in advance** (default 10;
+  0 = always decode while playing).
 - **Rive player → Backlight brightness**, **stats interval**
 
 ## Performance
@@ -266,8 +267,9 @@ mkdir -p out && ./build-host/rive_host_render main/assets/sample.riv out 30
 # → out/frame_000.ppm … frame_029.ppm (+ average timing per frame)
 # Arguments: <file.riv> <out_dir> [frames=10] [fps=30] [size=720] [lanes=2] [partial=1]
 #            [buffers=2] [balance=1] [cull=1] [bgskip=1] [inplace=1]
-#            [wav=<file>] [tap=x,y,downFrame,upFrame]
+#            [wav=<file>] [tap=x,y,downFrame,upFrame] [predecode=1]
 # wav: also mix the file's audio (48 kHz stereo) and write it to a WAV file.
+# predecode: decode the sounds in advance as the board does (0: stream them).
 # tap: one touch at panel pixel x,y, like the board's touch screen, e.g.
 #   ./build-host/rive_host_render main/assets/sound.riv out 120 30 720 2 1 2 1 1 1 1 out/sound.wav 396,180,10,60
 # Lanes beyond the first run on worker threads, like core 0 on the board.
@@ -292,7 +294,11 @@ Working:
 - **Audio** (miniaudio: MP3, WAV, FLAC, Vorbis): audio events play through
   the speaker header. Rive's engine runs as an "external" engine and a task
   on core 0 pulls 5 ms blocks from it. Sounds are decoded as they play, from
-  the compressed bytes in the `.riv`. menuconfig → Rive runtime → Audio
+  the compressed bytes in the `.riv`, except that sounds up to 10 s
+  (configurable) are decoded once when the file loads, already converted to
+  the output's 48 kHz mono, so playing them only mixes ready samples (about
+  30× cheaper; ~188 KB of PSRAM per second of sound). Rive mixes in mono,
+  since the board has one speaker. menuconfig → Rive runtime → Audio
 - Touch: a lifted finger also sends a pointer exit, so hover listeners fire
   on every tap
 

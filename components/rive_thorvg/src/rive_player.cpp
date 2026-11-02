@@ -8,6 +8,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <vector>
+
+#ifdef WITH_RIVE_AUDIO
+#include "miniaudio.h"
+#include "rive/assets/audio_asset.hpp"
+#include "rive/audio/audio_source.hpp"
+#endif
 
 namespace rive_thorvg
 {
@@ -264,6 +271,97 @@ rive::Vec2D RivePlayer::toArtboard(float x, float y) const
       rive::AABB(0.0f, 0.0f, float(m_width), float(m_height)),
       m_artboard->bounds());
   return m.invertOrIdentity() * rive::Vec2D(x, y);
+}
+
+size_t RivePlayer::prepareAudio(uint32_t channels,
+                                uint32_t sampleRate,
+                                float maxSeconds)
+{
+  size_t kept = 0;
+#ifdef WITH_RIVE_AUDIO
+  if (m_file == nullptr || channels == 0 || sampleRate == 0)
+  {
+    return 0;
+  }
+  static const char* const kFormats[] = {
+      "unknown", "wav", "flac", "mp3", "vorbis", "buffered"};
+  const uint64_t maxFrames = uint64_t(maxSeconds * float(sampleRate));
+  for (const auto& asset : m_file->assets())
+  {
+    if (!asset->is<rive::AudioAsset>())
+    {
+      continue;
+    }
+    auto* audio = static_cast<rive::AudioAsset*>(asset.get());
+    rive::rcp<rive::AudioSource> source = audio->audioSource();
+    if (source == nullptr || source->isBuffered())
+    {
+      continue; // hosted (not in the file) or already buffered
+    }
+    const auto start = Clock::now();
+    const int format = int(source->format());
+    const uint32_t srcRate = source->sampleRate();
+    const uint32_t srcChannels = source->channels();
+
+    // The decoder converts to the engine's format, channel count and rate
+    // while decoding, so playback needs no conversion at all.
+    ma_decoder decoder;
+    ma_decoder_config config =
+        ma_decoder_config_init(ma_format_f32, channels, sampleRate);
+    const auto bytes = source->bytes();
+    if (ma_decoder_init_memory(bytes.data(), bytes.size(), &config,
+                               &decoder) != MA_SUCCESS)
+    {
+      std::printf("RivePlayer: sound '%s' could not be decoded\n",
+                  audio->name().c_str());
+      continue;
+    }
+    std::vector<float> pcm;
+    constexpr uint64_t kChunk = 4096;
+    bool tooLong = false;
+    for (;;)
+    {
+      const size_t at = pcm.size();
+      pcm.resize(at + kChunk * channels);
+      ma_uint64 got = 0;
+      ma_decoder_read_pcm_frames(&decoder, pcm.data() + at, kChunk, &got);
+      pcm.resize(at + size_t(got) * channels);
+      if (pcm.size() / channels > maxFrames)
+      {
+        tooLong = true;
+        break;
+      }
+      if (got < kChunk)
+      {
+        break;
+      }
+    }
+    ma_decoder_uninit(&decoder);
+    const char* fmt = format >= 0 && format < 6 ? kFormats[format] : "?";
+    if (tooLong || pcm.empty())
+    {
+      std::printf("RivePlayer: sound '%s' (%s, %u Hz, %u ch, %zu bytes): "
+                  "%s, streamed\n",
+                  audio->name().c_str(), fmt, unsigned(srcRate),
+                  unsigned(srcChannels), bytes.size(),
+                  tooLong ? "longer than the buffering limit" : "empty");
+      continue;
+    }
+    const size_t frames = pcm.size() / channels;
+    audio->audioSource(rive::rcp<rive::AudioSource>(new rive::AudioSource(
+        rive::Span<float>(pcm.data(), pcm.size()), channels, sampleRate)));
+    kept += pcm.size() * sizeof(float);
+    std::printf("RivePlayer: sound '%s' (%s, %u Hz, %u ch, %zu bytes) "
+                "decoded to %.2f s of %u Hz %u ch float (%zu KB) in %.0f "
+                "ms\n",
+                audio->name().c_str(), fmt, unsigned(srcRate),
+                unsigned(srcChannels), bytes.size(),
+                double(frames) / sampleRate, unsigned(sampleRate),
+                unsigned(channels), pcm.size() * sizeof(float) / 1024,
+                double(msSince(start)));
+  }
+#endif
+  return kept;
 }
 
 void RivePlayer::pointerDown(float x, float y)

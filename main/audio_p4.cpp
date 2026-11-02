@@ -20,7 +20,11 @@ static const char* TAG = "audio";
 
 namespace
 {
-constexpr uint32_t kChannels = 2;
+// Rive mixes in mono: the board has one speaker, and a mono mix is half
+// the work of a stereo one. The I2S frame is still stereo (both slots get
+// the same sample).
+constexpr uint32_t kChannels = 1;
+constexpr uint32_t kSlots = 2;
 // 256 frames = 5.3 ms at 48 kHz: small enough that a sound starts promptly
 // after its event, large enough that the per-block overhead stays low.
 constexpr uint32_t kBlockFrames = 256;
@@ -117,7 +121,7 @@ bool codecInit()
   s_codec = esp_codec_dev_new(&devCfg);
   esp_codec_dev_sample_info_t fs = {};
   fs.bits_per_sample = 16;
-  fs.channel = kChannels;
+  fs.channel = kSlots;
   fs.sample_rate = kRate;
   if (s_codec == nullptr || esp_codec_dev_open(s_codec, &fs) != ESP_CODEC_DEV_OK)
   {
@@ -132,7 +136,7 @@ bool codecInit()
 void audioTask(void*)
 {
   static float mix[kBlockFrames * kChannels];
-  static int16_t pcm[kBlockFrames * kChannels];
+  static int16_t pcm[kBlockFrames * kSlots];
   const TickType_t blockTicks =
       std::max<TickType_t>(1, pdMS_TO_TICKS(kBlockFrames * 1000 / kRate));
   TickType_t wake = xTaskGetTickCount();
@@ -147,7 +151,7 @@ void audioTask(void*)
     {
       // The ES8311 has one DAC (the speaker is mono): send the mono mix on
       // both slots.
-      float v = 0.5f * (mix[2 * i] + mix[2 * i + 1]);
+      float v = mix[i];
       v = std::min(1.0f, std::max(-1.0f, v));
       peak = std::max(peak, std::fabs(v));
       const int16_t s = int16_t(std::lrintf(v * 32767.0f));
@@ -176,6 +180,9 @@ void audioTask(void*)
 }
 } // namespace
 
+uint32_t audio_channels(void) { return kChannels; }
+uint32_t audio_sample_rate(void) { return kRate; }
+
 esp_err_t audio_start(int core)
 {
   s_engine = rive::AudioEngine::MakeAndStore(kChannels, kRate);
@@ -185,7 +192,7 @@ esp_err_t audio_start(int core)
     return ESP_FAIL;
   }
   const bool codec = codecInit();
-  ESP_LOGI(TAG, "%s, %u Hz, %u-frame blocks, volume %d%%",
+  ESP_LOGI(TAG, "%s, %u Hz mono, %u-frame blocks, volume %d%%",
            codec ? "ES8311 ready" : "no codec, output measured only",
            unsigned(kRate), unsigned(kBlockFrames), CONFIG_RIVE_AUDIO_VOLUME);
   // Above the render tasks (5) so a block is never late while a frame
