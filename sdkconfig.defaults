@@ -1,0 +1,30 @@
+# Waveshare ESP32-P4-WIFI6-Touch-LCD-4B
+
+CONFIG_IDF_TARGET="esp32p4"
+
+# Chip revision. ESP-IDF 5.5 defaults to ESP32-P4 rev v3.x silicon. Boards
+# with an older chip (esptool reports "revision v1.x" when flashing) need
+# this line uncommented, otherwise the bootloader refuses to start the app:
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+
+# Flash / partitions (16 MB is safe on the 32 MB part as well)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Performance
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+CONFIG_FREERTOS_HZ=1000
+
+# PSRAM: frame buffers (2 x 1 MB) and the 2 MB ARGB render target live here
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# The page-flip callback in display_p4.c runs from the DSI interrupt
+CONFIG_LCD_DSI_ISR_HANDLER_IN_IRAM=y
