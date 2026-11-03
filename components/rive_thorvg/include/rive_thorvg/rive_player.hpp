@@ -152,6 +152,15 @@ public:
   // Lanes update changed draws in place where possible (default on). Call
   // before createLane().
   void setInPlaceUpdates(bool on) { m_inPlace = on; }
+  // Called just before and after rive::File::import in load(), and only
+  // around it: the file's static objects are made there, while the
+  // artboard instance and its per-frame render paths (hot data for every
+  // frame) come after. The board uses this to put the import in PSRAM.
+  void setImportHooks(void (*before)(), void (*after)())
+  {
+    m_importBefore = before;
+    m_importAfter = after;
+  }
   // Scripting builds: drop scripts whose editor signature doesn't verify
   // (default off: every script runs). Call before load().
   void setRequireSignedScripts(bool on) { m_requireSignedScripts = on; }
@@ -193,6 +202,8 @@ private:
 
   rive::rcp<rive::File> m_file;
   bool m_requireSignedScripts = false;
+  void (*m_importBefore)() = nullptr;
+  void (*m_importAfter)() = nullptr;
   rive::rcp<rive::ViewModelInstance> m_viewModel;
   rive::rcp<rive::ViewModelInstanceRuntime> m_viewModelRuntime;
   std::unique_ptr<rive::ArtboardInstance> m_artboard;

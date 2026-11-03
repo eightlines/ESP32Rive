@@ -241,9 +241,14 @@ static void rive_task(void*)
            kRenderSize, unsigned(kLanes),
            kPartial ? "on" : "off");
 #if CONFIG_RIVE_LOAD_INTO_PSRAM
-  // The file's objects are long-lived and many: put them in PSRAM (see
-  // Rive player > Load the .riv's objects into PSRAM). Restored below.
-  heap_caps_malloc_extmem_enable(0);
+  // The file's own objects (shapes as stored, text runs, view models,
+  // script bytecode) go to PSRAM while it is imported. Only the import:
+  // the artboard instance and its render paths, which every frame reads,
+  // are made afterwards in internal RAM (putting those in PSRAM cost the
+  // car ~15% fps).
+  player.setImportHooks(
+      [] { heap_caps_malloc_extmem_enable(0); },
+      [] { heap_caps_malloc_extmem_enable(CONFIG_RIVE_PSRAM_MALLOC_LIMIT); });
 #endif
   if (!player.load(rive_file_start, rivSize))
   {
@@ -265,9 +270,6 @@ static void rive_task(void*)
                double(esp_timer_get_time() - t0) / 1000.0);
     }
   }
-#endif
-#if CONFIG_RIVE_LOAD_INTO_PSRAM
-  heap_caps_malloc_extmem_enable(CONFIG_RIVE_PSRAM_MALLOC_LIMIT);
 #endif
   memStage("file load");
   ESP_LOGI(TAG, "free heap: internal %u, PSRAM %u",
