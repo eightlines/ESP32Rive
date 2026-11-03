@@ -15,6 +15,10 @@ set(AUDIO_SRCS)
 if(CONFIG_RIVE_AUDIO_OUT)
     set(AUDIO_SRCS "audio_p4.cpp")
 endif()
+set(NET_SRCS)
+if(CONFIG_RIVE_NET_CONTROL)
+    set(NET_SRCS "net_control.cpp")
+endif()
 
 idf_component_register(
     SRCS
@@ -25,8 +29,9 @@ idf_component_register(
         "touch_gt911.c"
         "board_i2c.c"
         ${AUDIO_SRCS}
+        ${NET_SRCS}
     INCLUDE_DIRS "."
-    REQUIRES rive_thorvg esp_lcd esp_driver_ppa esp_driver_ledc esp_driver_i2c esp_driver_i2s esp_timer
+    REQUIRES rive_thorvg esp_lcd esp_driver_ppa esp_driver_ledc esp_driver_i2c esp_driver_i2s esp_timer esp_eth esp_netif esp_event lwip
     EMBED_FILES "${CMAKE_CURRENT_BINARY_DIR}/rive_file.riv"
 )
 

@@ -17,6 +17,11 @@ if(CONFIG_RIVE_AUDIO)
 else()
     set(RIVE_WITH_AUDIO OFF)
 endif()
+if(CONFIG_RIVE_SCRIPTING)
+    set(RIVE_WITH_SCRIPTING ON)
+else()
+    set(RIVE_WITH_SCRIPTING OFF)
+endif()
 include("${CMAKE_CURRENT_LIST_DIR}/rive_sources.cmake")
 
 idf_component_register(

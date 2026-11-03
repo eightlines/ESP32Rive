@@ -53,7 +53,7 @@ Rive's own renderers all need a GPU, and the P4 doesn't have one.
 | `components/rive_thorvg/` | Rive → ThorVG adapter: `ThorvgFactory`, `ThorvgRenderer` (records draws), `ThorvgLane` (retained ThorVG canvas per core), `RivePlayer` |
 | `components/rive_runtime/` | ESP-IDF build wrapper for `third_party/rive-runtime` |
 | `components/thorvg/` | ESP-IDF build wrapper for `third_party/thorvg` (software engine + PNG/JPG/WebP loaders), plus build-time patches in `fast/` (see below) |
-| `third_party/` | Git submodules: rive-runtime (`runtime-v0.1.675`), ThorVG (`v1.1.3`), and for text and layouts the versions rive-runtime pins: HarfBuzz (`rive-app/harfbuzz@rive_13.1.1`), SheenBidi (`v2.6`), Yoga (`rive-app/yoga@rive_yoga_dee88d2dfcad`), and for audio miniaudio (`rive-app/miniaudio@rive_changes_11`) |
+| `third_party/` | Git submodules: rive-runtime (`runtime-v0.1.675`), ThorVG (`v1.1.3`), and for text and layouts the versions rive-runtime pins: HarfBuzz (`rive-app/harfbuzz@rive_13.1.1`), SheenBidi (`v2.6`), Yoga (`rive-app/yoga@rive_yoga_dee88d2dfcad`), for audio miniaudio (`rive-app/miniaudio@rive_changes_11`), and for scripting Luau (`luigi-rosso/luau@rive_0_734_ice`) and libhydrogen (`luigi-rosso/libhydrogen@rive_0_2`) |
 | `host/` | Desktop build of the same code that renders `.riv` frames to image files |
 | `tools/` | Submodule setup scripts |
 | `components/patch_source.cmake` | Applies small fixes / hooks to upstream files at build time (see below) |
@@ -157,7 +157,7 @@ I (5124) rive:   lane 1 (core 0, rows 400-720): 129.8 ms = apply 13.1 + prep 45.
 
 ## Using your own animation
 
-Four test files are included; pick one in `idf.py menuconfig` → Rive
+Six test files are included; pick one in `idf.py menuconfig` → Rive
 player → **Embedded .riv file**:
 
 - **Off-road car** (`sample.riv`, default): animation, gradients, clips
@@ -167,6 +167,11 @@ player → **Embedded .riv file**:
 - **Sound** (`sound.riv`): a red square that plays a sound when touched
   (hover listener + audio event). Needs a speaker on the board's MX1.25
   header.
+- **Data binding** (`data_binding_test.riv`): a grid of formulas computed
+  from one bound number. `set formula_input 5` over the network recomputes
+  them.
+- **Scripted listeners** (`multi_listeners.riv`): Luau scripts write the
+  text lines in response to events and touches.
 
 To use your own file, replace `main/assets/sample.riv` with it (or add it
 and a choice in `main/Kconfig.projbuild`) and rebuild. The artboard is
@@ -203,7 +208,49 @@ animation.
   stats line logs the output peak level, so you can see sounds play
   without a speaker. **Decode sounds up to N s in advance** (default 10;
   0 = always decode while playing).
+- **Rive player → Network control** (default on): see below.
+- **Rive runtime → Scripting** (default on) and **Only run signed scripts**
+  (default off).
 - **Rive player → Backlight brightness**, **stats interval**
+
+## Network control (Ethernet)
+
+The Ethernet port comes up with DHCP; the address is logged
+(`net: address 192.168.1.50 (DHCP), control port 7500 …`). Plugged straight
+into a PC (no DHCP server), it takes a fixed address after 8 s:
+**169.254.50.50**, in the link-local range Windows and macOS give
+themselves when nobody hands out addresses, so the PC reaches it with no
+setup (give the PC's Ethernet adapter ~30 s to fall back to 169.254.x.x).
+The fixed address, netmask, timeout or "fixed address only" are under
+menuconfig → Rive player → Network control. Text commands, one
+per line, over TCP or UDP on port 7500 (menuconfig → Rive player → Network
+control) set the playing file's data-bound view model properties:
+
+```bash
+echo "list" | nc 192.168.1.50 7500                 # every property, its type and value
+echo "set formula_input 5" | nc 192.168.1.50 7500  # number, string, boolean, enum
+echo "set theme/accent #FF8000" | nc 192.168.1.50 7500   # color; nested view model path
+echo "fire reset" | nc -u -w1 192.168.1.50 7500    # trigger (UDP: fire and forget)
+```
+
+Commands: `list`, `get <path>`, `set <path> <value>`, `fire <path>`,
+`down|move|up <x> <y>` (touch in frame pixels), `info`, `help`. Replies are
+`ok …` or `error <reason>`. Values: numbers as text, `true`/`false`,
+`#RRGGBB` / `#AARRGGBB`, enum value names (or indices), strings as the rest
+of the line. Commands run between frames on the render task, so they never
+race with Rive. PHY: IP101GRI (address 1, reset GPIO 51; the RMII pins are
+ESP-IDF's ESP32-P4 defaults, which match the board). The host test build
+runs the same commands from a file (`commands=<file>`, `<frame> <command>`
+lines).
+
+On Windows without `nc`, use `tools/rive_cmd.ps1` (plain PowerShell):
+
+```powershell
+./tools/rive_cmd.ps1 list                                  # default address 169.254.50.50
+./tools/rive_cmd.ps1 "set formula_input 5" "get formula_input"
+./tools/rive_cmd.ps1 -Address 192.168.1.50 list
+./tools/rive_cmd.ps1                                       # interactive prompt
+```
 
 ## Performance
 
@@ -267,7 +314,7 @@ mkdir -p out && ./build-host/rive_host_render main/assets/sample.riv out 30
 # → out/frame_000.ppm … frame_029.ppm (+ average timing per frame)
 # Arguments: <file.riv> <out_dir> [frames=10] [fps=30] [size=720] [lanes=2] [partial=1]
 #            [buffers=2] [balance=1] [cull=1] [bgskip=1] [inplace=1]
-#            [wav=<file>] [tap=x,y,downFrame,upFrame] [predecode=1]
+#            [wav=<file>] [tap=x,y,downFrame,upFrame] [predecode=1] [commands=<file>]
 # wav: also mix the file's audio (48 kHz stereo) and write it to a WAV file.
 # predecode: decode the sounds in advance as the board does (0: stream them).
 # tap: one touch at panel pixel x,y, like the board's touch screen, e.g.
@@ -299,13 +346,20 @@ Working:
   the output's 48 kHz mono, so playing them only mixes ready samples (about
   30× cheaper; ~188 KB of PSRAM per second of sound). Rive mixes in mono,
   since the board has one speaker. menuconfig → Rive runtime → Audio
+- **Data binding**: the artboard's default view model instance is bound
+  on load (like Rive's `autoBind`), and its properties can be set over
+  Ethernet (see "Network control") or from C++
+  (`RivePlayer::setProperty` / `fireTrigger` / `viewModelProperties`)
+- **Scripting** (Luau): scripts in the `.riv` run on a Luau VM. Signature
+  checks are optional (menuconfig). Not supported: scripts decoding image
+  bytes, the GPU canvas API
 - Touch: a lifted finger also sends a pointer exit, so hover listeners fire
   on every tap
 
 Not yet:
 - **Hosted assets**: fonts or images stored outside the `.riv` (on Rive's
   CDN or as separate files) aren't loaded
-- **Scripting** (Luau): compiled out
+- **Script image decoding** and the scripting **GPU canvas** API
 - **Mesh-deformed images**: ThorVG has no textured-triangle API. A warning is
   logged once.
 - **Feathering** (soft edges): not drawn
@@ -326,7 +380,8 @@ Not yet:
 
 Project code: MIT (see `LICENSE`). Rive runtime: MIT. ThorVG: MIT.
 HarfBuzz: MIT ("Old MIT"). SheenBidi: Apache 2.0. Yoga: MIT. miniaudio:
-public domain / MIT-0. esp_codec_dev: Apache 2.0. The files in
+public domain / MIT-0. esp_codec_dev: Apache 2.0. Luau: MIT. libhydrogen:
+ISC. The files in
 `main/assets/` are test assets from the rive-runtime repository
 (`off_road_car.riv`, `electrified_button_simple.riv`, `scroll_snap.riv`,
-`sound.riv`).
+`sound.riv`, `data_binding_test.riv`, `multi_listeners.riv`).

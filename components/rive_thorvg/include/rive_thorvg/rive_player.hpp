@@ -25,6 +25,8 @@
 #include "rive/file.hpp"
 #include "rive/layout.hpp"
 #include "rive/scene.hpp"
+#include "rive/viewmodel/runtime/viewmodel_instance_runtime.hpp"
+#include "rive/viewmodel/viewmodel_instance.hpp"
 #include "rive_thorvg/display_list.hpp"
 #include "rive_thorvg/thorvg_factory.hpp"
 #include "rive_thorvg/thorvg_lane.hpp"
@@ -81,6 +83,40 @@ public:
   // sound is logged; returns the bytes of samples kept in memory.
   size_t prepareAudio(uint32_t channels, uint32_t sampleRate, float maxSeconds);
 
+  // Data binding. load() binds the artboard's default view model instance
+  // (if the file has view models); these read and write its properties by
+  // path: "score", or "player/name" for a property of a nested view model.
+  // Call from the thread that calls advance(). Values are text:
+  //   number "42.5", boolean "true"/"false"/"1"/"0", color "#RRGGBB" or
+  //   "#AARRGGBB", enum a value name or its index, string as is.
+  struct ViewModelProperty
+  {
+    std::string path;
+    std::string type;  // number, string, boolean, color, enum, trigger, ...
+    std::string value; // current value as text (empty for triggers)
+  };
+  bool hasViewModel() const { return m_viewModelRuntime != nullptr; }
+  std::string viewModelName() const;
+  // Every property, nested view models flattened into paths.
+  std::vector<ViewModelProperty> viewModelProperties() const;
+  // Sets a property from text; false (with a reason) if there's no such
+  // property or the text doesn't fit its type.
+  bool setProperty(const std::string& path,
+                   const std::string& value,
+                   std::string* error = nullptr);
+  bool getProperty(const std::string& path, std::string* value) const;
+  bool fireTrigger(const std::string& path);
+  // One text command (the board's network protocol, also used by the host
+  // test), returning the reply. Commands:
+  //   list                 every property: "<path> <type> <value>" lines
+  //   get <path>           "ok <value>"
+  //   set <path> <value>   "ok"; the value is the rest of the line
+  //   fire <path>          fires a trigger
+  //   down|move|up <x> <y> pointer input in frame pixels
+  //   info / help
+  // Errors reply "error <reason>". Call from the thread that calls advance().
+  std::string command(const std::string& line);
+
   // Advances the scene by `seconds`.
   void advance(float seconds);
   // Records the current frame's draw calls and moves on to the next frame
@@ -116,6 +152,9 @@ public:
   // Lanes update changed draws in place where possible (default on). Call
   // before createLane().
   void setInPlaceUpdates(bool on) { m_inPlace = on; }
+  // Scripting builds: drop scripts whose editor signature doesn't verify
+  // (default off: every script runs). Call before load().
+  void setRequireSignedScripts(bool on) { m_requireSignedScripts = on; }
 
   const FrameStats& stats() const { return m_stats; }
   // The draws recorded by the last build().
@@ -153,6 +192,9 @@ private:
   std::vector<std::unique_ptr<ThorvgLane>> m_lanes;
 
   rive::rcp<rive::File> m_file;
+  bool m_requireSignedScripts = false;
+  rive::rcp<rive::ViewModelInstance> m_viewModel;
+  rive::rcp<rive::ViewModelInstanceRuntime> m_viewModelRuntime;
   std::unique_ptr<rive::ArtboardInstance> m_artboard;
   std::unique_ptr<rive::Scene> m_scene;
   rive::Fit m_fit = rive::Fit::contain;

@@ -20,6 +20,9 @@
 #include "audio_p4.h"
 #endif
 #include "display_p4.h"
+#if CONFIG_RIVE_NET_CONTROL
+#include "net_control.h"
+#endif
 #include "pie_selftest.h"
 #include "raster_profile.h"
 #include "touch_gt911.h"
@@ -146,6 +149,14 @@ static void rive_task(void*)
   {
     ESP_LOGW(TAG, "touch unavailable");
   }
+#if CONFIG_RIVE_NET_CONTROL
+  // Ethernet + the command port. Not fatal: without a cable the animation
+  // still plays.
+  if (net_control_start(0) != ESP_OK)
+  {
+    ESP_LOGW(TAG, "network control unavailable");
+  }
+#endif
 #if CONFIG_RIVE_AUDIO_OUT
   // Before the file loads, so its audio events find the engine. The audio
   // task runs on core 0 next to lane 1; it needs ~2% of a core.
@@ -176,6 +187,9 @@ static void rive_task(void*)
   player.setInPlaceUpdates(true);
 #else
   player.setInPlaceUpdates(false);
+#endif
+#if CONFIG_RIVE_SCRIPTING_REQUIRE_SIGNED
+  player.setRequireSignedScripts(true);
 #endif
   player.createLane(0); // this task (core 1) renders lane 0
 
@@ -294,6 +308,11 @@ static void rive_task(void*)
       }
     }
 
+#if CONFIG_RIVE_NET_CONTROL
+    // Commands from the network ("set score 42"), between frames.
+    net_control_service(
+        [](const std::string& line) { return player.command(line); });
+#endif
     player.advance(dt);
     player.build(); // also switches to the other ARGB buffer
 

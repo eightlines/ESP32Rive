@@ -8,7 +8,8 @@
 #
 # Options (default ON): RIVE_WITH_TEXT (HarfBuzz + SheenBidi),
 # RIVE_WITH_LAYOUT (Yoga) and RIVE_WITH_AUDIO (miniaudio, external engine:
-# the app pulls mixed PCM itself). Built without scripting (Luau). Disabled features are compiled out by the runtime's own WITH_RIVE_*
+# the app pulls mixed PCM itself), and RIVE_WITH_SCRIPTING (Luau VM +
+# libhydrogen for script signature checks). Disabled features are compiled out by the runtime's own WITH_RIVE_*
 # guards, so every .cpp can be globbed in. Dependency versions and build
 # settings follow rive-runtime/dependencies/premake5_*_v2.lua, without the
 # symbol renames (only needed when an app links a second HarfBuzz / Yoga).
@@ -43,6 +44,9 @@ if(NOT DEFINED RIVE_WITH_LAYOUT)
 endif()
 if(NOT DEFINED RIVE_WITH_AUDIO)
     set(RIVE_WITH_AUDIO ON)
+endif()
+if(NOT DEFINED RIVE_WITH_SCRIPTING)
+    set(RIVE_WITH_SCRIPTING ON)
 endif()
 
 # Text: HarfBuzz (shaping, rive-app/harfbuzz@rive_13.1.1) and SheenBidi
@@ -180,4 +184,31 @@ if(RIVE_WITH_AUDIO)
     list(APPEND RIVE_PUBLIC_DEFINES
         WITH_RIVE_AUDIO EXTERNAL_RIVE_AUDIO_ENGINE
         MA_NO_DEVICE_IO MA_NO_RESOURCE_MANAGER MA_NO_ENCODING MA_NO_GENERATION)
+endif()
+
+# Scripting: Luau (luigi-rosso/luau@rive_0_734_ice, VM only: scripts are
+# stored compiled in the .riv) and libhydrogen (luigi-rosso/libhydrogen@
+# rive_0_2, verify-only, checks the editor's signature on a file's scripts),
+# as rive-runtime/scripting/premake5.lua and premake5_v2.lua build them.
+# Without RIVE_DECODERS: scripts can't decode image bytes themselves.
+if(RIVE_WITH_SCRIPTING)
+    set(LUAU_DIR "${RIVE_DEPS_DIR}/luau")
+    set(LIBHYDROGEN_DIR "${RIVE_DEPS_DIR}/libhydrogen")
+    if(NOT EXISTS "${LUAU_DIR}/VM/src/lvm.h" OR NOT EXISTS "${LIBHYDROGEN_DIR}/libhydrogen.c")
+        message(FATAL_ERROR
+            "Luau / libhydrogen not found in ${RIVE_DEPS_DIR}.\n"
+            "Run: tools/setup_submodules (sh or ps1)")
+    endif()
+    file(GLOB RIVE_LUAU_SRCS "${LUAU_DIR}/VM/src/*.cpp")
+    # lbuiltins.cpp uses LLONG_MIN without <climits>, which glibc pulls in
+    # indirectly and newlib doesn't.
+    set_source_files_properties(${RIVE_LUAU_SRCS} PROPERTIES
+        COMPILE_DEFINITIONS "LUA_USE_LONGJMP;RIVE_LUAU"
+        COMPILE_OPTIONS "-include;climits")
+    set(RIVE_LIBHYDROGEN_SRCS "${LIBHYDROGEN_DIR}/libhydrogen.c")
+    list(APPEND RIVE_SRCS ${RIVE_LUAU_SRCS} ${RIVE_LIBHYDROGEN_SRCS})
+    list(APPEND RIVE_PUBLIC_INCS "${LUAU_DIR}/VM/include" "${LUAU_DIR}/Common/include"
+        "${LIBHYDROGEN_DIR}" "${RIVE_DIR}/scripting")
+    list(APPEND RIVE_PUBLIC_DEFINES WITH_RIVE_SCRIPTING WITH_RIVE_SCRIPTING_LUAU
+        HYDRO_SIGN_VERIFY_ONLY=1)
 endif()
