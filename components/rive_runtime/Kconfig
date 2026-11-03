@@ -24,4 +24,23 @@ menu "Rive runtime"
             an external engine: no audio device inside miniaudio; the app
             pulls mixed samples (see Rive player > Audio output).
 
+    config RIVE_SCRIPTING
+        bool "Scripting (Luau)"
+        default y
+        help
+            Runs the scripts a .riv carries (Rive's Luau scripting): the
+            Luau VM, plus libhydrogen to check the editor's signature on
+            them. Scripts arrive compiled, so no compiler is built.
+            Scripts that decode image bytes, or use the GPU canvas API,
+            aren't supported.
+
+    config RIVE_SCRIPTING_REQUIRE_SIGNED
+        bool "Only run signed scripts"
+        default n
+        depends on RIVE_SCRIPTING
+        help
+            Drops scripts whose signature (added by the Rive editor on
+            export) doesn't verify. Off: all scripts run, as in the
+            editor.
+
 endmenu

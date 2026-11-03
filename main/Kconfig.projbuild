@@ -17,6 +17,12 @@ menu "Rive player"
         config RIVE_FILE_SOUND
             bool "Sound (audio event, from rive-runtime's tests)"
             depends on RIVE_AUDIO
+        config RIVE_FILE_DATA_BINDING
+            bool "Data binding (a grid of formulas; set formula_input over the network)"
+            depends on RIVE_TEXT
+        config RIVE_FILE_SCRIPTED
+            bool "Scripted listeners (Luau scripts react to touch)"
+            depends on RIVE_SCRIPTING && RIVE_TEXT
     endchoice
 
     config RIVE_EMBEDDED_FILE_NAME
@@ -25,6 +31,8 @@ menu "Rive player"
         default "electrified_button.riv" if RIVE_FILE_BUTTON
         default "scroll_snap.riv" if RIVE_FILE_SCROLL
         default "sound.riv" if RIVE_FILE_SOUND
+        default "data_binding_test.riv" if RIVE_FILE_DATA_BINDING
+        default "multi_listeners.riv" if RIVE_FILE_SCRIPTED
 
     config RIVE_RENDER_HALF_RES
         bool "Render at 360x360 and upscale 2x with the PPA"
@@ -104,6 +112,30 @@ menu "Rive player"
         range 0 100
         default 100
 
+    config RIVE_LOAD_INTO_PSRAM
+        bool "Load the .riv's objects into PSRAM"
+        default y
+        help
+            While the file loads (and its sounds are decoded), malloc()
+            prefers PSRAM for every size, so the file's thousands of small
+            long-lived objects (shapes, text, view models, the script VM)
+            don't fill internal RAM. Rendering afterwards keeps the normal
+            rule (below), so per-frame memory stays in fast internal RAM.
+            Measured on multi_listeners.riv: the load took 175 KB of
+            internal RAM without this.
+
+    config RIVE_PSRAM_MALLOC_LIMIT
+        int "malloc() puts allocations of at least this many bytes in PSRAM"
+        default 16384
+        range 0 65536
+        help
+            Smaller allocations go to internal RAM first (ESP-IDF's
+            default limit is 16384). A Rive file's objects are many small
+            allocations, so a big file can fill internal RAM, which DMA,
+            Ethernet and fast stacks also need. Lower values (e.g. 256)
+            move them to PSRAM; that may cost some speed. The startup log
+            ("mem:" lines) shows what each stage takes.
+
     config RIVE_STATS_INTERVAL_MS
         int "Interval between FPS / timing log lines (ms)"
         default 2000
@@ -169,6 +201,73 @@ menu "Audio output"
                 Pins default to the Waveshare ESP32-P4-86-Panel-ETH-2RO /
                 ESP32-P4-WIFI6-Touch-LCD-4B wiki (I2C for the codec is the
                 touch bus, GPIO 7 / 8). -1 if there is no amplifier pin.
+    endmenu
+
+menu "Network control"
+
+        config RIVE_NET_CONTROL
+            bool "Control the animation over Ethernet"
+            default y
+            help
+                Brings up the Ethernet port (DHCP) and accepts text commands
+                on a UDP and TCP port, one per line: list, get <path>,
+                set <path> <value>, fire <path>, down/move/up <x> <y>,
+                info. They set the data-bound view model properties of the
+                playing file. The address is logged once DHCP completes.
+
+        config RIVE_NET_PORT
+            int "Command port (UDP and TCP)"
+            default 7500
+            depends on RIVE_NET_CONTROL
+
+        choice RIVE_NET_ADDRESS_MODE
+            prompt "IP address"
+            default RIVE_NET_DHCP_FALLBACK
+            depends on RIVE_NET_CONTROL
+
+            config RIVE_NET_DHCP_FALLBACK
+                bool "DHCP, then the fixed address below if no server answers"
+                help
+                    Plugged into a router or switch: DHCP. Plugged straight
+                    into a PC (no DHCP server): after the timeout the board
+                    takes the fixed address. The default, 169.254.50.50/16,
+                    is in the link-local range Windows and macOS give
+                    themselves without DHCP, so the PC reaches it with no
+                    setup.
+            config RIVE_NET_STATIC
+                bool "Fixed address only"
+        endchoice
+
+        config RIVE_NET_DHCP_TIMEOUT_S
+            int "Seconds to wait for DHCP before using the fixed address"
+            default 8
+            range 1 120
+            depends on RIVE_NET_DHCP_FALLBACK
+
+        config RIVE_NET_STATIC_IP
+            string "Fixed IP address"
+            default "169.254.50.50"
+            depends on RIVE_NET_CONTROL
+
+        config RIVE_NET_STATIC_NETMASK
+            string "Fixed address netmask"
+            default "255.255.0.0"
+            depends on RIVE_NET_CONTROL
+
+        config RIVE_NET_STATIC_GATEWAY
+            string "Fixed address gateway (0.0.0.0 for none)"
+            default "0.0.0.0"
+            depends on RIVE_NET_CONTROL
+
+        config RIVE_ETH_PHY_ADDR
+            int "Ethernet PHY address (IP101GRI)"
+            default 1
+            depends on RIVE_NET_CONTROL
+
+        config RIVE_ETH_PHY_RESET_GPIO
+            int "Ethernet PHY reset GPIO"
+            default 51
+            depends on RIVE_NET_CONTROL
     endmenu
 
 endmenu

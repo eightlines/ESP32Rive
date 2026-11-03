@@ -3,11 +3,21 @@
 #include "rive/animation/state_machine_instance.hpp"
 #include "rive/artboard.hpp"
 #include "rive/math/aabb.hpp"
+#include "rive/viewmodel/runtime/viewmodel_instance_boolean_runtime.hpp"
+#include "rive/viewmodel/runtime/viewmodel_instance_color_runtime.hpp"
+#include "rive/viewmodel/runtime/viewmodel_instance_enum_runtime.hpp"
+#include "rive/viewmodel/runtime/viewmodel_instance_number_runtime.hpp"
+#include "rive/viewmodel/runtime/viewmodel_instance_string_runtime.hpp"
+#include "rive/viewmodel/runtime/viewmodel_instance_trigger_runtime.hpp"
+#include "rive/viewmodel/runtime/viewmodel_runtime.hpp"
+#include "rive/viewmodel/viewmodel_instance.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 #ifdef WITH_RIVE_AUDIO
@@ -87,7 +97,10 @@ bool RivePlayer::load(const uint8_t* data, size_t size)
   rive::ImportResult result;
   m_file = rive::File::import(rive::Span<const uint8_t>(data, size),
                               &m_factory,
-                              &result);
+                              &result,
+                              static_cast<rive::FileAssetLoader*>(nullptr),
+                              nullptr, // scripts get a default Luau VM
+                              m_requireSignedScripts);
   if (m_file == nullptr || result != rive::ImportResult::success)
   {
     std::printf("RivePlayer: import failed (result %d)\n",
@@ -106,6 +119,29 @@ bool RivePlayer::load(const uint8_t* data, size_t size)
   {
     std::printf("RivePlayer: artboard has no animation or state machine; "
                 "drawing it static\n");
+  }
+  // Data binding: give the artboard its view model's default instance (as
+  // Rive's own players do with autoBind), so bound properties, lists and
+  // nested artboards get their values. Files without a view model get
+  // nullptr and are unaffected.
+  m_viewModel = nullptr;
+  m_viewModelRuntime = nullptr;
+  if (m_file->viewModelCount() > 0)
+  {
+    m_viewModel = m_file->createDefaultViewModelInstance(m_artboard.get());
+    if (m_viewModel != nullptr)
+    {
+      m_viewModelRuntime = rive::make_rcp<rive::ViewModelInstanceRuntime>(
+          m_viewModel);
+      if (m_scene)
+      {
+        m_scene->bindViewModelInstance(m_viewModel);
+      }
+      else
+      {
+        m_artboard->bindViewModelInstance(m_viewModel);
+      }
+    }
   }
   rive::AABB b = m_artboard->bounds();
   std::printf("RivePlayer: artboard '%s' %.0fx%.0f, scene '%s', "
@@ -362,6 +398,330 @@ size_t RivePlayer::prepareAudio(uint32_t channels,
   }
 #endif
   return kept;
+}
+
+namespace
+{
+const char* typeName(rive::DataType t)
+{
+  switch (t)
+  {
+    case rive::DataType::string: return "string";
+    case rive::DataType::number: return "number";
+    case rive::DataType::boolean: return "boolean";
+    case rive::DataType::color: return "color";
+    case rive::DataType::list: return "list";
+    case rive::DataType::enumType: return "enum";
+    case rive::DataType::trigger: return "trigger";
+    case rive::DataType::viewModel: return "viewModel";
+    case rive::DataType::integer: return "integer";
+    case rive::DataType::assetImage: return "image";
+    case rive::DataType::artboard: return "artboard";
+    default: return "other";
+  }
+}
+
+std::string colorText(int argb)
+{
+  char buf[16];
+  std::snprintf(buf, sizeof(buf), "#%08X", unsigned(argb));
+  return buf;
+}
+
+std::string numberText(float v)
+{
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%g", double(v));
+  return buf;
+}
+
+void listProperties(const rive::ViewModelInstanceRuntime& vm,
+                    const std::string& prefix,
+                    std::vector<RivePlayer::ViewModelProperty>* out,
+                    int depth)
+{
+  for (const auto& p : vm.properties())
+  {
+    const std::string path = prefix + p.name;
+    if (p.type == rive::DataType::viewModel)
+    {
+      auto child = vm.propertyViewModel(p.name);
+      if (child != nullptr && depth < 8)
+      {
+        listProperties(*child, path + "/", out, depth + 1);
+      }
+      continue;
+    }
+    RivePlayer::ViewModelProperty prop{path, typeName(p.type), ""};
+    switch (p.type)
+    {
+      case rive::DataType::number:
+        if (auto* v = vm.propertyNumber(p.name)) prop.value = numberText(v->value());
+        break;
+      case rive::DataType::string:
+        if (auto* v = vm.propertyString(p.name)) prop.value = v->value();
+        break;
+      case rive::DataType::boolean:
+        if (auto* v = vm.propertyBoolean(p.name)) prop.value = v->value() ? "true" : "false";
+        break;
+      case rive::DataType::color:
+        if (auto* v = vm.propertyColor(p.name)) prop.value = colorText(v->value());
+        break;
+      case rive::DataType::enumType:
+        if (auto* v = vm.propertyEnum(p.name))
+        {
+          prop.value = v->value();
+          prop.type += " (";
+          const auto values = v->values();
+          for (size_t i = 0; i < values.size(); ++i)
+          {
+            prop.type += (i ? "|" : "") + values[i];
+          }
+          prop.type += ")";
+        }
+        break;
+      default:
+        break;
+    }
+    out->push_back(std::move(prop));
+  }
+}
+
+bool parseFloat(const std::string& s, float* out)
+{
+  char* end = nullptr;
+  const float v = std::strtof(s.c_str(), &end);
+  if (end == s.c_str() || *end != '\0')
+  {
+    return false;
+  }
+  *out = v;
+  return true;
+}
+} // namespace
+
+std::string RivePlayer::viewModelName() const
+{
+  return m_viewModelRuntime ? m_viewModelRuntime->viewModelName() : "";
+}
+
+std::vector<RivePlayer::ViewModelProperty> RivePlayer::viewModelProperties()
+    const
+{
+  std::vector<ViewModelProperty> out;
+  if (m_viewModelRuntime)
+  {
+    listProperties(*m_viewModelRuntime, "", &out, 0);
+  }
+  return out;
+}
+
+bool RivePlayer::getProperty(const std::string& path, std::string* value) const
+{
+  for (const auto& p : viewModelProperties())
+  {
+    if (p.path == path)
+    {
+      *value = p.value;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool RivePlayer::setProperty(const std::string& path,
+                             const std::string& value,
+                             std::string* error)
+{
+  auto fail = [&](const char* why) {
+    if (error)
+    {
+      *error = why;
+    }
+    return false;
+  };
+  if (!m_viewModelRuntime)
+  {
+    return fail("the file has no view model");
+  }
+  auto& vm = *m_viewModelRuntime;
+  if (auto* p = vm.propertyNumber(path))
+  {
+    float v;
+    if (!parseFloat(value, &v))
+    {
+      return fail("not a number");
+    }
+    p->value(v);
+    return true;
+  }
+  if (auto* p = vm.propertyString(path))
+  {
+    p->value(value);
+    return true;
+  }
+  if (auto* p = vm.propertyBoolean(path))
+  {
+    if (value == "true" || value == "1" || value == "on")
+    {
+      p->value(true);
+    }
+    else if (value == "false" || value == "0" || value == "off")
+    {
+      p->value(false);
+    }
+    else
+    {
+      return fail("not a boolean (true/false/1/0)");
+    }
+    return true;
+  }
+  if (auto* p = vm.propertyColor(path))
+  {
+    std::string hex = value;
+    if (!hex.empty() && hex[0] == '#')
+    {
+      hex.erase(0, 1);
+    }
+    if ((hex.size() != 6 && hex.size() != 8) ||
+        hex.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+    {
+      return fail("not a color (#RRGGBB or #AARRGGBB)");
+    }
+    unsigned long v = std::strtoul(hex.c_str(), nullptr, 16);
+    if (hex.size() == 6)
+    {
+      v |= 0xFF000000ul;
+    }
+    p->value(int(uint32_t(v)));
+    return true;
+  }
+  if (auto* p = vm.propertyEnum(path))
+  {
+    const auto values = p->values();
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+      if (values[i] == value)
+      {
+        p->valueIndex(uint32_t(i));
+        return true;
+      }
+    }
+    char* end = nullptr;
+    const unsigned long i = std::strtoul(value.c_str(), &end, 10);
+    if (end != value.c_str() && *end == '\0' && i < values.size())
+    {
+      p->valueIndex(uint32_t(i));
+      return true;
+    }
+    return fail("not one of the enum's values");
+  }
+  if (vm.propertyTrigger(path))
+  {
+    return fireTrigger(path);
+  }
+  return fail("no such property (try list)");
+}
+
+bool RivePlayer::fireTrigger(const std::string& path)
+{
+  if (!m_viewModelRuntime)
+  {
+    return false;
+  }
+  if (auto* p = m_viewModelRuntime->propertyTrigger(path))
+  {
+    p->trigger();
+    return true;
+  }
+  return false;
+}
+
+std::string RivePlayer::command(const std::string& rawLine)
+{
+  std::string line = rawLine;
+  while (!line.empty() &&
+         (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
+  {
+    line.pop_back();
+  }
+  const size_t sp = line.find(' ');
+  const std::string verb = line.substr(0, sp);
+  std::string rest = sp == std::string::npos ? "" : line.substr(sp + 1);
+  while (!rest.empty() && rest.front() == ' ')
+  {
+    rest.erase(0, 1);
+  }
+  const size_t sp2 = rest.find(' ');
+  const std::string arg = rest.substr(0, sp2);
+  const std::string value =
+      sp2 == std::string::npos ? "" : rest.substr(sp2 + 1);
+
+  if (verb == "list")
+  {
+    if (!hasViewModel())
+    {
+      return "error the file has no view model\n";
+    }
+    std::string out;
+    for (const auto& p : viewModelProperties())
+    {
+      out += p.path + " " + p.type + " " + p.value + "\n";
+    }
+    return out + "ok\n";
+  }
+  if (verb == "get")
+  {
+    std::string v;
+    return getProperty(arg, &v) ? "ok " + v + "\n"
+                                : "error no such property (try list)\n";
+  }
+  if (verb == "set")
+  {
+    std::string why;
+    return setProperty(arg, value, &why) ? "ok\n" : "error " + why + "\n";
+  }
+  if (verb == "fire")
+  {
+    return fireTrigger(arg) ? "ok\n" : "error no such trigger (try list)\n";
+  }
+  if (verb == "down" || verb == "move" || verb == "up")
+  {
+    float x, y;
+    if (!parseFloat(arg, &x) || !parseFloat(value, &y))
+    {
+      return "error usage: " + verb + " <x> <y>\n";
+    }
+    if (verb == "down")
+    {
+      pointerMove(x, y);
+      pointerDown(x, y);
+    }
+    else if (verb == "move")
+    {
+      pointerMove(x, y);
+    }
+    else
+    {
+      pointerUp(x, y);
+      pointerExit(x, y);
+    }
+    return "ok\n";
+  }
+  if (verb == "info")
+  {
+    std::string out = "artboard " + (m_artboard ? m_artboard->name() : "-") +
+                      "\nscene " + (m_scene ? m_scene->name() : "-") +
+                      "\nviewmodel " +
+                      (hasViewModel() ? viewModelName() : "-") + "\n";
+    return out + "ok\n";
+  }
+  if (verb == "help" || verb.empty())
+  {
+    return "commands: list | get <path> | set <path> <value> | fire <path> "
+           "| down|move|up <x> <y> | info\nok\n";
+  }
+  return "error unknown command '" + verb + "' (try help)\n";
 }
 
 void RivePlayer::pointerDown(float x, float y)

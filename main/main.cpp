@@ -20,6 +20,9 @@
 #include "audio_p4.h"
 #endif
 #include "display_p4.h"
+#if CONFIG_RIVE_NET_CONTROL
+#include "net_control.h"
+#endif
 #include "pie_selftest.h"
 #include "raster_profile.h"
 #include "touch_gt911.h"
@@ -132,6 +135,30 @@ static void memoryBenchmark()
   }
 }
 
+// Internal RAM is the scarce kind (about 400 KB, also needed for DMA and
+// fast stacks); this logs how much each startup stage took.
+static void memStage(const char* stage)
+{
+  static size_t last = 0;
+  const size_t now = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  if (last == 0)
+  {
+    ESP_LOGI(TAG, "mem: internal %u KB free, PSRAM %u KB free (%s)",
+             unsigned(now / 1024),
+             unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+             stage);
+  }
+  else
+  {
+    ESP_LOGI(TAG, "mem: %-28s internal %4d KB -> %3u KB free (largest block "
+             "%u KB)", stage, -int((int64_t(last) - int64_t(now)) / 1024),
+             unsigned(now / 1024),
+             unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) /
+                      1024));
+  }
+  last = now;
+}
+
 static void rive_task(void*)
 {
   ESP_ERROR_CHECK(display_init(CONFIG_RIVE_BACKLIGHT_PERCENT));
@@ -139,6 +166,7 @@ static void rive_task(void*)
            unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
            unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
            unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+  memStage("start");
   memoryBenchmark();
   pie_selftest_run();
   // Touch is optional: without it the animation still plays.
@@ -146,10 +174,21 @@ static void rive_task(void*)
   {
     ESP_LOGW(TAG, "touch unavailable");
   }
+  memStage("touch");
+#if CONFIG_RIVE_NET_CONTROL
+  // Ethernet + the command port. Not fatal: without a cable the animation
+  // still plays.
+  if (net_control_start(0) != ESP_OK)
+  {
+    ESP_LOGW(TAG, "network control unavailable");
+  }
+  memStage("Ethernet + network tasks");
+#endif
 #if CONFIG_RIVE_AUDIO_OUT
   // Before the file loads, so its audio events find the engine. The audio
   // task runs on core 0 next to lane 1; it needs ~2% of a core.
   audio_start(0);
+  memStage("audio");
 #endif
 
   // Render targets: two premultiplied ARGB8888 frames in PSRAM, used
@@ -177,6 +216,9 @@ static void rive_task(void*)
 #else
   player.setInPlaceUpdates(false);
 #endif
+#if CONFIG_RIVE_SCRIPTING_REQUIRE_SIGNED
+  player.setRequireSignedScripts(true);
+#endif
   player.createLane(0); // this task (core 1) renders lane 0
 
   static LaneWorker worker;
@@ -191,12 +233,18 @@ static void rive_task(void*)
     xSemaphoreTake(worker.done, portMAX_DELAY); // lane 1 created
   }
 
+  memStage("render buffers + lanes");
   const size_t rivSize = rive_file_end - rive_file_start;
   ESP_LOGI(TAG, "loading %s (%u bytes): %dx%d, %u lane(s), partial "
            "redraw %s",
            CONFIG_RIVE_EMBEDDED_FILE_NAME, unsigned(rivSize), kRenderSize,
            kRenderSize, unsigned(kLanes),
            kPartial ? "on" : "off");
+#if CONFIG_RIVE_LOAD_INTO_PSRAM
+  // The file's objects are long-lived and many: put them in PSRAM (see
+  // Rive player > Load the .riv's objects into PSRAM). Restored below.
+  heap_caps_malloc_extmem_enable(0);
+#endif
   if (!player.load(rive_file_start, rivSize))
   {
     ESP_LOGE(TAG, "could not load %s", CONFIG_RIVE_EMBEDDED_FILE_NAME);
@@ -218,6 +266,10 @@ static void rive_task(void*)
     }
   }
 #endif
+#if CONFIG_RIVE_LOAD_INTO_PSRAM
+  heap_caps_malloc_extmem_enable(CONFIG_RIVE_PSRAM_MALLOC_LIMIT);
+#endif
+  memStage("file load");
   ESP_LOGI(TAG, "free heap: internal %u, PSRAM %u",
            unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
            unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
@@ -294,6 +346,11 @@ static void rive_task(void*)
       }
     }
 
+#if CONFIG_RIVE_NET_CONTROL
+    // Commands from the network ("set score 42"), between frames.
+    net_control_service(
+        [](const std::string& line) { return player.command(line); });
+#endif
     player.advance(dt);
     player.build(); // also switches to the other ARGB buffer
 
@@ -425,6 +482,12 @@ static void rive_task(void*)
         ESP_LOGI(TAG, "  split moved %d time(s)", moves);
       }
       raster_profile_report(TAG, frames_);
+      static bool firstStats = true;
+      if (firstStats)
+      {
+        firstStats = false;
+        memStage("first frames");
+      }
 #if CONFIG_RIVE_AUDIO_OUT
       {
         const audio_stats_t a = audio_take_stats();
@@ -460,6 +523,12 @@ static void rive_task(void*)
 
 extern "C" void app_main(void)
 {
+#if CONFIG_RIVE_PSRAM_MALLOC_LIMIT != 16384
+  // See Rive player > malloc() puts allocations of at least ... in PSRAM.
+  heap_caps_malloc_extmem_enable(CONFIG_RIVE_PSRAM_MALLOC_LIMIT);
+  ESP_LOGI(TAG, "malloc: %d bytes and up prefer PSRAM",
+           CONFIG_RIVE_PSRAM_MALLOC_LIMIT);
+#endif
   // Rive file parsing and ThorVG rasterisation recurse; give them room.
   xTaskCreatePinnedToCore(rive_task, "rive", 32 * 1024, nullptr, 5, nullptr, 1);
 }

@@ -4,13 +4,16 @@
 //   rive_host_render <file.riv> <out_dir> [frames=10] [fps=30] [size=720]
 //                    [lanes=2] [partial=1] [buffers=2] [balance=1] [cull=1]
 //                    [bgskip=1] [inplace=1] [wav=<file>] [tap=x,y,f0,f1]
-//                    [predecode=1]
+//                    [predecode=1] [commands=<file>]
 //
 // wav: with Rive audio built in, mixes the file's sounds at 48 kHz stereo
 // in step with the frames (as the board's audio task does) and writes them
 // to a 16-bit WAV file. tap: a touch like the board's at panel pixel (x, y),
 // down on frame f0 (pointer move + down) and up on frame f1. predecode=1
 // decodes the sounds in advance as the board does (prepareAudio).
+// commands: a text file of "<frame> <command>" lines, run before that
+// frame with RivePlayer::command (the board's network protocol); replies
+// are printed.
 // lanes > 1 renders the extra lanes on worker threads, like the board does
 // on its second core. partial=1 enables ThorVG's partial redraw. buffers=2
 // alternates two frame buffers (one ThorVG canvas per buffer per lane), as
@@ -197,6 +200,24 @@ int main(int argc, char** argv)
     std::sscanf(argv[14], "%f,%f,%d,%d", &tapX, &tapY, &tapDown, &tapUp);
   }
   const bool predecode = argc > 15 ? std::atoi(argv[15]) != 0 : true;
+  std::vector<std::pair<int, std::string>> commands;
+  if (argc > 16)
+  {
+    FILE* cf = std::fopen(argv[16], "r");
+    char buf[512];
+    while (cf && std::fgets(buf, sizeof(buf), cf))
+    {
+      int frame = 0, n = 0;
+      if (std::sscanf(buf, "%d %n", &frame, &n) == 1)
+      {
+        commands.emplace_back(frame, std::string(buf + n));
+      }
+    }
+    if (cf)
+    {
+      std::fclose(cf);
+    }
+  }
   constexpr uint32_t kAudioRate = 48000, kAudioChannels = 2;
   std::vector<int16_t> wav;
 #ifdef WITH_RIVE_AUDIO
@@ -255,6 +276,14 @@ int main(int argc, char** argv)
     int rebuilds = 0, moves = 0;
     for (int i = 0; i < frames; ++i)
     {
+      for (const auto& c : commands)
+      {
+        if (c.first == i)
+        {
+          std::printf("[frame %d] > %s%s", i, c.second.c_str(),
+                      player.command(c.second).c_str());
+        }
+      }
       if (i == tapDown)
       {
         player.pointerMove(tapX, tapY);
