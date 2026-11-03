@@ -112,6 +112,30 @@ menu "Rive player"
         range 0 100
         default 100
 
+    config RIVE_LOAD_INTO_PSRAM
+        bool "Load the .riv's objects into PSRAM"
+        default y
+        help
+            While the file loads (and its sounds are decoded), malloc()
+            prefers PSRAM for every size, so the file's thousands of small
+            long-lived objects (shapes, text, view models, the script VM)
+            don't fill internal RAM. Rendering afterwards keeps the normal
+            rule (below), so per-frame memory stays in fast internal RAM.
+            Measured on multi_listeners.riv: the load took 175 KB of
+            internal RAM without this.
+
+    config RIVE_PSRAM_MALLOC_LIMIT
+        int "malloc() puts allocations of at least this many bytes in PSRAM"
+        default 16384
+        range 0 65536
+        help
+            Smaller allocations go to internal RAM first (ESP-IDF's
+            default limit is 16384). A Rive file's objects are many small
+            allocations, so a big file can fill internal RAM, which DMA,
+            Ethernet and fast stacks also need. Lower values (e.g. 256)
+            move them to PSRAM; that may cost some speed. The startup log
+            ("mem:" lines) shows what each stage takes.
+
     config RIVE_STATS_INTERVAL_MS
         int "Interval between FPS / timing log lines (ms)"
         default 2000

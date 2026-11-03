@@ -8,9 +8,11 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "sdkconfig.h"
@@ -62,14 +64,12 @@ void useStaticAddress(const char* why)
 }
 
 #if CONFIG_RIVE_NET_DHCP_FALLBACK
-void dhcpFallbackTask(void*)
+void dhcpTimeout(void*)
 {
-  vTaskDelay(pdMS_TO_TICKS(CONFIG_RIVE_NET_DHCP_TIMEOUT_S * 1000));
   if (!s_haveAddress)
   {
     useStaticAddress("fixed: no DHCP server answered");
   }
-  vTaskDelete(nullptr);
 }
 #endif
 
@@ -136,7 +136,7 @@ void udpTask(void*)
   if (sock < 0 || bind(sock, (sockaddr*)&addr, sizeof(addr)) != 0)
   {
     ESP_LOGE(TAG, "UDP port %d unavailable", CONFIG_RIVE_NET_PORT);
-    vTaskDelete(nullptr);
+    vTaskSuspend(nullptr); // created with caps: can't delete itself
     return;
   }
   static char buf[1472];
@@ -198,7 +198,7 @@ void tcpTask(void*)
       listen(sock, 2) != 0)
   {
     ESP_LOGE(TAG, "TCP port %d unavailable", CONFIG_RIVE_NET_PORT);
-    vTaskDelete(nullptr);
+    vTaskSuspend(nullptr); // created with caps: can't delete itself
     return;
   }
   for (;;)
@@ -276,14 +276,27 @@ esp_err_t net_control_start(int core)
 #endif
   ESP_RETURN_ON_ERROR(esp_eth_start(eth), TAG, "start");
 #if CONFIG_RIVE_NET_DHCP_FALLBACK
-  xTaskCreatePinnedToCore(dhcpFallbackTask, "net_dhcp", 3072, nullptr, 4,
-                          nullptr, core);
+  // One-shot timer (runs in the esp_timer task): no task of its own.
+  esp_timer_create_args_t timerArgs = {};
+  timerArgs.callback = dhcpTimeout;
+  timerArgs.name = "net_dhcp";
+  esp_timer_handle_t timer = nullptr;
+  if (esp_timer_create(&timerArgs, &timer) == ESP_OK)
+  {
+    esp_timer_start_once(timer,
+                         uint64_t(CONFIG_RIVE_NET_DHCP_TIMEOUT_S) * 1000000);
+  }
 #endif
 
   // Below the render tasks: they mostly wait on sockets, and a command only
   // runs when the render task picks it up.
-  xTaskCreatePinnedToCore(udpTask, "net_udp", 6 * 1024, nullptr, 4, nullptr, core);
-  xTaskCreatePinnedToCore(tcpTask, "net_tcp", 6 * 1024, nullptr, 4, nullptr, core);
+  // Their stacks live in PSRAM (internal RAM is scarce); socket I/O runs in
+  // lwIP's own task.
+  constexpr UBaseType_t kStackCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+  xTaskCreatePinnedToCoreWithCaps(udpTask, "net_udp", 6 * 1024, nullptr, 4,
+                                  nullptr, core, kStackCaps);
+  xTaskCreatePinnedToCoreWithCaps(tcpTask, "net_tcp", 6 * 1024, nullptr, 4,
+                                  nullptr, core, kStackCaps);
 #if CONFIG_RIVE_NET_STATIC
   ESP_LOGI(TAG, "Ethernet started (IP101 at address %d), fixed address",
            CONFIG_RIVE_ETH_PHY_ADDR);

@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "rive/audio/audio_engine.hpp"
 #include "sdkconfig.h"
@@ -197,8 +198,12 @@ esp_err_t audio_start(int core)
            unsigned(kRate), unsigned(kBlockFrames), CONFIG_RIVE_AUDIO_VOLUME);
   // Above the render tasks (5) so a block is never late while a frame
   // renders; it only runs for ~2% of the time.
-  if (xTaskCreatePinnedToCore(audioTask, "audio", kStackBytes, nullptr, 7,
-                              &s_task, core) != pdPASS)
+  // The stack lives in PSRAM: miniaudio needs ~22 KB of it when a sound
+  // streams, and internal RAM is scarce. Mixing touches it lightly.
+  if (xTaskCreatePinnedToCoreWithCaps(audioTask, "audio", kStackBytes, nullptr,
+                                      7, &s_task, core,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) !=
+      pdPASS)
   {
     return ESP_ERR_NO_MEM;
   }
