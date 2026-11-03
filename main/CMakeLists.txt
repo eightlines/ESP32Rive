@@ -28,10 +28,11 @@ idf_component_register(
         "pie_selftest.cpp"
         "touch_gt911.c"
         "board_i2c.c"
+        "riv_store.cpp"
         ${AUDIO_SRCS}
         ${NET_SRCS}
     INCLUDE_DIRS "."
-    REQUIRES rive_thorvg esp_lcd esp_driver_ppa esp_driver_ledc esp_driver_i2c esp_driver_i2s esp_timer esp_eth esp_netif esp_event lwip
+    REQUIRES rive_thorvg esp_lcd esp_driver_ppa esp_driver_ledc esp_driver_i2c esp_driver_i2s esp_timer esp_eth esp_netif esp_event lwip esp_http_server esp_partition esp_rom
     EMBED_FILES "${CMAKE_CURRENT_BINARY_DIR}/rive_file.riv"
 )
 

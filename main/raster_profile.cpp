@@ -147,7 +147,7 @@ void raster_profile_report(const char* tag, int frames)
     ESP_LOGI(tag, "%s", line);
 #if CONFIG_RIVE_THORVG_FAST_GRADIENT
     ESP_LOGI(tag,
-             "  core %d gradient px/frame: opaque %" PRIu32
+             "  core %d linear-gradient px/frame (fast path only): opaque %" PRIu32
              " | translucent %" PRIu32 " | edges %" PRIu32,
              core, uint32_t(p.gradPx[0] / uint32_t(frames)),
              uint32_t(p.gradPx[1] / uint32_t(frames)),

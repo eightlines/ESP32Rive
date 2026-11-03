@@ -25,6 +25,15 @@ menu "Rive player"
             depends on RIVE_SCRIPTING && RIVE_TEXT
     endchoice
 
+    config RIVE_PLAY_STORED_FILE
+        bool "At boot, play the last uploaded .riv (if any) instead"
+        default y
+        help
+            A file uploaded over the network is saved in the "storage"
+            flash partition. With this on, it plays at boot instead of
+            the embedded file, until it is forgotten (web page, or
+            DELETE /riv) or a new one is uploaded.
+
     config RIVE_EMBEDDED_FILE_NAME
         string
         default "sample.riv" if RIVE_FILE_CAR
@@ -257,6 +266,23 @@ menu "Network control"
             string "Fixed address gateway (0.0.0.0 for none)"
             default "0.0.0.0"
             depends on RIVE_NET_CONTROL
+
+        config RIVE_NET_HTTP
+            bool "Web page: upload a .riv and send commands (HTTP)"
+            default y
+            depends on RIVE_NET_CONTROL
+            help
+                Serves a small page at http://<board address>/ to upload a
+                .riv (it plays at once and is saved to the storage
+                partition for the next boot) and to send commands. Also
+                usable from scripts: POST /riv?name=<file> with the file
+                as the body, POST /cmd with commands as the body,
+                DELETE /riv to forget the uploaded file.
+
+        config RIVE_NET_HTTP_PORT
+            int "Web page port"
+            default 80
+            depends on RIVE_NET_HTTP
 
         config RIVE_ETH_PHY_ADDR
             int "Ethernet PHY address (IP101GRI)"

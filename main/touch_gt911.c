@@ -34,6 +34,9 @@ static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
 static QueueHandle_t s_events;
 static uint32_t s_period_ms;
+// Diagnostics, read with touch_take_stats().
+static volatile uint32_t s_polls, s_errors, s_ready, s_points;
+static volatile esp_err_t s_last_error = ESP_OK;
 static uint16_t s_res_x = DISPLAY_WIDTH, s_res_y = DISPLAY_HEIGHT;
 
 static esp_err_t gt911_read(uint16_t reg, uint8_t* data, size_t len)
@@ -72,9 +75,13 @@ static void touch_task(void* arg)
   while (true)
   {
     vTaskDelayUntil(&wake, period);
+    s_polls++;
     uint8_t status = 0;
-    if (gt911_read(GT911_REG_STATUS, &status, 1) != ESP_OK)
+    const esp_err_t err = gt911_read(GT911_REG_STATUS, &status, 1);
+    if (err != ESP_OK)
     {
+      s_errors++;
+      s_last_error = err;
       if (++errors == 10)
       {
         ESP_LOGW(TAG, "GT911 not answering (10 failed reads)");
@@ -86,7 +93,12 @@ static void touch_task(void* arg)
     {
       continue; // no new sample yet
     }
+    s_ready++;
     const int points = status & 0x0F;
+    if (points > 0)
+    {
+      s_points++;
+    }
     if (points > 0 && points <= 5)
     {
       uint8_t p[8];
@@ -180,6 +192,16 @@ esp_err_t touch_gt911_start(int core, uint32_t period_ms)
     return ESP_ERR_NO_MEM;
   }
   return ESP_OK;
+}
+
+void touch_take_stats(touch_stats_t* stats)
+{
+  stats->polls = s_polls;
+  stats->errors = s_errors;
+  stats->ready = s_ready;
+  stats->points = s_points;
+  stats->last_error = s_last_error;
+  s_polls = s_errors = s_ready = s_points = 0;
 }
 
 bool touch_next_event(touch_event_t* event)

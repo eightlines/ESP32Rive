@@ -35,6 +35,19 @@ typedef struct
 // app can carry on without touch.
 esp_err_t touch_gt911_start(int core, uint32_t period_ms);
 
+// Polling counters since the previous call (for the stats log): polls,
+// failed reads, samples the controller marked ready, and of those, samples
+// with a finger down.
+typedef struct
+{
+  uint32_t polls;
+  uint32_t errors;
+  uint32_t ready;
+  uint32_t points;
+  esp_err_t last_error;
+} touch_stats_t;
+void touch_take_stats(touch_stats_t* stats);
+
 // Next queued touch event, without waiting. False when there is none.
 bool touch_next_event(touch_event_t* event);
 

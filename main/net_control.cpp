@@ -4,6 +4,8 @@
 #include <cstring>
 
 #include "esp_eth.h"
+#include "esp_heap_caps.h"
+#include "esp_http_server.h"
 #include "esp_event.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -17,6 +19,8 @@
 #include "lwip/sockets.h"
 #include "sdkconfig.h"
 
+#include "riv_store.h"
+
 static const char* TAG = "net";
 
 namespace
@@ -26,7 +30,10 @@ struct Command
   std::string line;
   std::string reply;
   SemaphoreHandle_t done; // given by the render task when reply is set
+  std::function<std::string()> job; // instead of `line`: run this
 };
+
+RivLoader s_loader;
 
 QueueHandle_t s_queue; // Command*
 esp_netif_t* s_netif;
@@ -41,6 +48,13 @@ void logAddress(const esp_netif_ip_info_t& ip, const char* how)
            "e.g. echo \"list\" | nc " IPSTR " %d",
            IP2STR(&ip.ip), how, CONFIG_RIVE_NET_PORT, IP2STR(&ip.ip),
            CONFIG_RIVE_NET_PORT);
+#if CONFIG_RIVE_NET_HTTP
+  ESP_LOGI(TAG, "web page (upload a .riv, send commands): http://" IPSTR
+           "%s", IP2STR(&ip.ip),
+           CONFIG_RIVE_NET_HTTP_PORT == 80
+               ? ""
+               : (":" + std::to_string(CONFIG_RIVE_NET_HTTP_PORT)).c_str());
+#endif
 }
 
 // Switches to the fixed address from menuconfig.
@@ -73,10 +87,12 @@ void dhcpTimeout(void*)
 }
 #endif
 
-// Runs one command on the render task and waits for its reply.
-std::string submit(const std::string& line)
+// Runs one command (or job) on the render task and waits for its reply.
+std::string submit(const std::string& line,
+                   std::function<std::string()> job = nullptr,
+                   TickType_t wait = pdMS_TO_TICKS(2000))
 {
-  Command cmd{line, "", xSemaphoreCreateBinary()};
+  Command cmd{line, "", xSemaphoreCreateBinary(), std::move(job)};
   if (cmd.done == nullptr)
   {
     return "error out of memory\n";
@@ -87,7 +103,7 @@ std::string submit(const std::string& line)
   {
     reply = "error busy\n";
   }
-  else if (xSemaphoreTake(cmd.done, pdMS_TO_TICKS(2000)) != pdTRUE)
+  else if (xSemaphoreTake(cmd.done, wait) != pdTRUE)
   {
     // The render task still holds a pointer to cmd: wait for it rather than
     // free the command under it.
@@ -214,6 +230,243 @@ void tcpTask(void*)
   }
 }
 
+
+#if CONFIG_RIVE_NET_HTTP
+// ---- Web page and upload (HTTP) -------------------------------------------
+
+const char kPage[] = R"HTML(<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Rive player</title>
+<style>
+body{font:15px system-ui,sans-serif;margin:0;background:#16181b;color:#e8eaed}
+main{max-width:720px;margin:0 auto;padding:20px 16px;display:grid;gap:18px}
+h1{font-size:20px;margin:0}h2{font-size:15px;margin:0 0 8px;color:#9aa0a6}
+section{background:#1f2226;border:1px solid #33373c;border-radius:8px;padding:14px}
+button,input,textarea{font:inherit;color:inherit;background:#16181b;border:1px solid #3a3f45;border-radius:6px;padding:7px 10px}
+button{cursor:pointer}button:hover{border-color:#4fb3ff}
+textarea{width:100%;box-sizing:border-box;min-height:5em}
+pre{white-space:pre-wrap;margin:8px 0 0;font:13px ui-monospace,Consolas,monospace;color:#c5c9ce}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+</style></head><body><main>
+<h1>Rive player</h1>
+<section><h2>Playing</h2><pre id="info">…</pre></section>
+<section><h2>Upload a .riv</h2>
+<div class="row"><input type="file" id="file" accept=".riv"><button id="up">Upload and play</button>
+<button id="clear">Forget uploaded file</button></div>
+<pre id="upmsg"></pre></section>
+<section><h2>Commands</h2>
+<div class="row"><button data-c="list">list</button><button data-c="info">info</button><button data-c="help">help</button></div>
+<p><textarea id="cmd" placeholder="set formula_input 5"></textarea></p>
+<button id="send">Send</button><pre id="reply"></pre></section>
+</main><script>
+const $=id=>document.getElementById(id);
+async function cmd(t){const r=await fetch('/cmd',{method:'POST',body:t});return r.text();}
+async function refresh(){$('info').textContent=await cmd('info');}
+$('send').onclick=async()=>{$('reply').textContent=await cmd($('cmd').value);refresh();};
+document.querySelectorAll('[data-c]').forEach(b=>b.onclick=async()=>{$('reply').textContent=await cmd(b.dataset.c);});
+$('up').onclick=async()=>{const f=$('file').files[0];if(!f)return;
+ $('upmsg').textContent='Uploading '+f.name+' ('+f.size+' bytes)…';
+ const r=await fetch('/riv?name='+encodeURIComponent(f.name),{method:'POST',body:f});
+ $('upmsg').textContent=await r.text();refresh();};
+$('clear').onclick=async()=>{const r=await fetch('/riv',{method:'DELETE'});$('upmsg').textContent=await r.text();};
+refresh();
+</script></body></html>)HTML";
+
+esp_err_t pageGet(httpd_req_t* req)
+{
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  return httpd_resp_send(req, kPage, sizeof(kPage) - 1);
+}
+
+// Reads the request body (up to `limit` bytes) into a new PSRAM buffer.
+uint8_t* readBody(httpd_req_t* req, size_t limit, const char** error)
+{
+  const size_t size = req->content_len;
+  if (size == 0)
+  {
+    *error = "empty request";
+    return nullptr;
+  }
+  if (size > limit)
+  {
+    *error = "too large";
+    return nullptr;
+  }
+  auto* buf = static_cast<uint8_t*>(
+      heap_caps_malloc(size + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (buf == nullptr)
+  {
+    *error = "out of memory";
+    return nullptr;
+  }
+  size_t got = 0;
+  while (got < size)
+  {
+    const int n = httpd_req_recv(req, reinterpret_cast<char*>(buf) + got,
+                                 size - got);
+    if (n == HTTPD_SOCK_ERR_TIMEOUT)
+    {
+      continue;
+    }
+    if (n <= 0)
+    {
+      heap_caps_free(buf);
+      *error = "connection lost";
+      return nullptr;
+    }
+    got += size_t(n);
+  }
+  buf[size] = 0;
+  return buf;
+}
+
+esp_err_t sendText(httpd_req_t* req, const char* status, const std::string& text)
+{
+  httpd_resp_set_status(req, status);
+  httpd_resp_set_type(req, "text/plain; charset=utf-8");
+  return httpd_resp_send(req, text.data(), text.size());
+}
+
+esp_err_t cmdPost(httpd_req_t* req)
+{
+  const char* error = nullptr;
+  uint8_t* body = readBody(req, 4096, &error);
+  if (body == nullptr)
+  {
+    return sendText(req, "400 Bad Request", std::string("error ") + error + "\n");
+  }
+  const std::string reply =
+      runLines(reinterpret_cast<const char*>(body), req->content_len);
+  heap_caps_free(body);
+  return sendText(req, "200 OK", reply);
+}
+
+std::string uploadName(httpd_req_t* req)
+{
+  char query[160] = {};
+  char name[64] = {};
+  if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK)
+  {
+    httpd_query_key_value(query, "name", name, sizeof(name));
+  }
+  // Keep it printable: the browser sends it URL-encoded; spaces etc. stay
+  // as %xx, which is fine for a label.
+  std::string n = name[0] ? name : "uploaded.riv";
+  for (char& c : n)
+  {
+    if (c < 32 || c > 126)
+    {
+      c = '_';
+    }
+  }
+  return n;
+}
+
+esp_err_t rivPost(httpd_req_t* req)
+{
+  const std::string name = uploadName(req);
+  const char* error = nullptr;
+  const int64_t t0 = esp_timer_get_time();
+  uint8_t* data = readBody(req, riv_store_capacity(), &error);
+  if (data == nullptr)
+  {
+    return sendText(req, "400 Bad Request",
+                    std::string("error ") + error + " (limit " +
+                        std::to_string(riv_store_capacity()) + " bytes)\n");
+  }
+  const size_t size = req->content_len;
+  if (size < 4 || std::memcmp(data, "RIVE", 4) != 0)
+  {
+    heap_caps_free(data);
+    return sendText(req, "400 Bad Request", "error not a .riv file\n");
+  }
+  const int64_t t1 = esp_timer_get_time();
+  ESP_LOGI(TAG, "upload: %s, %u bytes in %.1f s", name.c_str(), unsigned(size),
+           double(t1 - t0) / 1e6);
+  if (!s_loader)
+  {
+    heap_caps_free(data);
+    return sendText(req, "503 Service Unavailable", "error player not ready\n");
+  }
+  // Keep a copy to save: the loader owns `data` from here on, and the
+  // player may free it if a later upload replaces it.
+  auto* copy = static_cast<uint8_t*>(
+      heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (copy)
+  {
+    std::memcpy(copy, data, size);
+  }
+  // Loading runs on the render task between frames; big files take a
+  // moment, so wait longer than for a command.
+  const std::string result = submit(
+      "(upload " + name + ")",
+      [data, size, name] { return s_loader(data, size, name); },
+      pdMS_TO_TICKS(20000));
+  if (!result.empty())
+  {
+    heap_caps_free(copy);
+    return sendText(req, "422 Unprocessable Entity",
+                    "error " + result + " (still playing the previous file)\n");
+  }
+  std::string reply = "ok playing " + name + " (" + std::to_string(size) +
+                      " bytes)";
+  if (copy)
+  {
+    const int64_t t2 = esp_timer_get_time();
+    const esp_err_t err = riv_store_save(copy, size, name.c_str());
+    heap_caps_free(copy);
+    reply += err == ESP_OK
+                 ? ", saved to flash for the next boot (" +
+                       std::to_string((esp_timer_get_time() - t2) / 1000) +
+                       " ms)"
+                 : std::string(", NOT saved: ") + esp_err_to_name(err);
+  }
+  else
+  {
+    reply += ", not saved (out of memory for the copy)";
+  }
+  ESP_LOGI(TAG, "%s", reply.c_str());
+  return sendText(req, "200 OK", reply + "\n");
+}
+
+esp_err_t rivDelete(httpd_req_t* req)
+{
+  const esp_err_t err = riv_store_clear();
+  return sendText(req, err == ESP_OK ? "200 OK" : "500 Internal Server Error",
+                  err == ESP_OK ? "ok the uploaded file is forgotten; the "
+                                  "embedded one plays after the next reset\n"
+                                : std::string("error ") + esp_err_to_name(err) +
+                                      "\n");
+}
+
+void startHttp()
+{
+  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+  config.server_port = CONFIG_RIVE_NET_HTTP_PORT;
+  config.ctrl_port = 32769;
+  config.stack_size = 8192;
+  config.recv_wait_timeout = 10;
+  config.send_wait_timeout = 10;
+  httpd_handle_t server = nullptr;
+  if (httpd_start(&server, &config) != ESP_OK)
+  {
+    ESP_LOGE(TAG, "HTTP server could not start on port %d",
+             CONFIG_RIVE_NET_HTTP_PORT);
+    return;
+  }
+  static const httpd_uri_t uris[] = {
+      {"/", HTTP_GET, pageGet, nullptr},
+      {"/cmd", HTTP_POST, cmdPost, nullptr},
+      {"/riv", HTTP_POST, rivPost, nullptr},
+      {"/riv", HTTP_DELETE, rivDelete, nullptr},
+  };
+  for (const auto& u : uris)
+  {
+    httpd_register_uri_handler(server, &u);
+  }
+}
+#endif
+
 void onEvent(void*, esp_event_base_t base, int32_t id, void* data)
 {
   if (base == ETH_EVENT && id == ETHERNET_EVENT_CONNECTED)
@@ -297,6 +550,9 @@ esp_err_t net_control_start(int core)
                                   nullptr, core, kStackCaps);
   xTaskCreatePinnedToCoreWithCaps(tcpTask, "net_tcp", 6 * 1024, nullptr, 4,
                                   nullptr, core, kStackCaps);
+#if CONFIG_RIVE_NET_HTTP
+  startHttp();
+#endif
 #if CONFIG_RIVE_NET_STATIC
   ESP_LOGI(TAG, "Ethernet started (IP101 at address %d), fixed address",
            CONFIG_RIVE_ETH_PHY_ADDR);
@@ -319,7 +575,9 @@ void net_control_service(
   while (xQueueReceive(s_queue, &cmd, 0) == pdTRUE)
   {
     ESP_LOGI(TAG, "> %s", cmd->line.c_str());
-    cmd->reply = handler(cmd->line);
+    cmd->reply = cmd->job ? cmd->job() : handler(cmd->line);
     xSemaphoreGive(cmd->done);
   }
 }
+
+void net_control_set_loader(RivLoader loader) { s_loader = std::move(loader); }
