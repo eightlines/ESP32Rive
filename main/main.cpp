@@ -15,6 +15,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstdint>
+#include <string>
 
 #if CONFIG_RIVE_AUDIO_OUT
 #include "audio_p4.h"
@@ -25,6 +26,7 @@
 #endif
 #include "pie_selftest.h"
 #include "raster_profile.h"
+#include "riv_store.h"
 #include "touch_gt911.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -234,10 +236,29 @@ static void rive_task(void*)
   }
 
   memStage("render buffers + lanes");
-  const size_t rivSize = rive_file_end - rive_file_start;
+  // The file to play: the last uploaded one (storage partition) if there is
+  // one, otherwise the embedded one.
+  const uint8_t* rivData = rive_file_start;
+  size_t rivSize = rive_file_end - rive_file_start;
+  std::string rivName = CONFIG_RIVE_EMBEDDED_FILE_NAME;
+  static uint8_t* s_uploaded = nullptr; // PSRAM buffer of the playing upload
+#if CONFIG_RIVE_PLAY_STORED_FILE
+  {
+    uint8_t* stored = nullptr;
+    size_t storedSize = 0;
+    std::string storedName;
+    if (riv_store_load(&stored, &storedSize, &storedName))
+    {
+      s_uploaded = stored;
+      rivData = stored;
+      rivSize = storedSize;
+      rivName = storedName + " (uploaded)";
+    }
+  }
+#endif
   ESP_LOGI(TAG, "loading %s (%u bytes): %dx%d, %u lane(s), partial "
            "redraw %s",
-           CONFIG_RIVE_EMBEDDED_FILE_NAME, unsigned(rivSize), kRenderSize,
+           rivName.c_str(), unsigned(rivSize), kRenderSize,
            kRenderSize, unsigned(kLanes),
            kPartial ? "on" : "off");
 #if CONFIG_RIVE_LOAD_INTO_PSRAM
@@ -250,11 +271,25 @@ static void rive_task(void*)
       [] { heap_caps_malloc_extmem_enable(0); },
       [] { heap_caps_malloc_extmem_enable(CONFIG_RIVE_PSRAM_MALLOC_LIMIT); });
 #endif
-  if (!player.load(rive_file_start, rivSize))
+  if (!player.load(rivData, rivSize))
   {
-    ESP_LOGE(TAG, "could not load %s", CONFIG_RIVE_EMBEDDED_FILE_NAME);
-    vTaskDelete(nullptr);
-    return;
+    ESP_LOGE(TAG, "could not load %s", rivName.c_str());
+    if (s_uploaded == nullptr)
+    {
+      vTaskDelete(nullptr);
+      return;
+    }
+    // A stored upload that doesn't load: fall back to the embedded file.
+    heap_caps_free(s_uploaded);
+    s_uploaded = nullptr;
+    rivData = rive_file_start;
+    rivSize = rive_file_end - rive_file_start;
+    rivName = CONFIG_RIVE_EMBEDDED_FILE_NAME;
+    if (!player.load(rivData, rivSize))
+    {
+      vTaskDelete(nullptr);
+      return;
+    }
   }
 #if CONFIG_RIVE_AUDIO_OUT && CONFIG_RIVE_AUDIO_BUFFER_SECONDS > 0
   // Decode short sounds once now, so playing them only mixes samples.
@@ -272,6 +307,39 @@ static void rive_task(void*)
   }
 #endif
   memStage("file load");
+#if CONFIG_RIVE_NET_HTTP
+  // Uploads arrive on the render task, between frames (net_control_service
+  // below). On failure the previous file is loaded again, so something
+  // always plays.
+  static const uint8_t* s_playing = rivData;
+  static size_t s_playingSize = rivSize;
+  net_control_set_loader(
+      [](uint8_t* data, size_t size, const std::string& name) -> std::string {
+        const int64_t t0 = esp_timer_get_time();
+        if (!player.load(data, size))
+        {
+          heap_caps_free(data);
+          player.load(s_playing, s_playingSize);
+          return "the file could not be loaded (see the board's log)";
+        }
+#if CONFIG_RIVE_AUDIO_OUT && CONFIG_RIVE_AUDIO_BUFFER_SECONDS > 0
+        player.prepareAudio(audio_channels(), audio_sample_rate(),
+                            float(CONFIG_RIVE_AUDIO_BUFFER_SECONDS));
+#endif
+        // The previous upload's bytes are no longer referenced.
+        if (s_uploaded != nullptr)
+        {
+          heap_caps_free(s_uploaded);
+        }
+        s_uploaded = data;
+        s_playing = data;
+        s_playingSize = size;
+        ESP_LOGI(TAG, "now playing %s (%u bytes), loaded in %.0f ms",
+                 name.c_str(), unsigned(size),
+                 double(esp_timer_get_time() - t0) / 1000.0);
+        return "";
+      });
+#endif
   ESP_LOGI(TAG, "free heap: internal %u, PSRAM %u",
            unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
            unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
@@ -489,6 +557,15 @@ static void rive_task(void*)
       {
         firstStats = false;
         memStage("first frames");
+      }
+      {
+        touch_stats_t t;
+        touch_take_stats(&t);
+        ESP_LOGI(TAG, "  touch: %" PRIu32 " polls, %" PRIu32 " failed (%s), "
+                 "%" PRIu32 " samples, %" PRIu32 " with a finger",
+                 t.polls, t.errors,
+                 t.errors ? esp_err_to_name(t.last_error) : "-", t.ready,
+                 t.points);
       }
 #if CONFIG_RIVE_AUDIO_OUT
       {

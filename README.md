@@ -157,6 +157,18 @@ I (5124) rive:   lane 1 (core 0, rows 400-720): 129.8 ms = apply 13.1 + prep 45.
 
 ## Using your own animation
 
+**Over the network (no rebuild):** open `http://<board address>/` in a
+browser (the address is in the log: `net: web page …`), choose a `.riv` and
+press **Upload and play**. It plays at once, and is saved to the 8 MB
+`storage` partition, so it plays again after a reset (menuconfig → Rive
+player → "At boot, play the last uploaded .riv"). **Forget uploaded file**
+goes back to the embedded one at the next reset. From PowerShell:
+`./tools/rive_cmd.ps1 -Upload my_design.riv` (and `-Forget`). If a file
+doesn't load, the previous one keeps playing and the error is shown. The
+same page has a box for the text commands below.
+
+**Embedded in the firmware:**
+
 Six test files are included; pick one in `idf.py menuconfig` → Rive
 player → **Embedded .riv file**:
 
@@ -242,6 +254,10 @@ race with Rive. PHY: IP101GRI (address 1, reset GPIO 51; the RMII pins are
 ESP-IDF's ESP32-P4 defaults, which match the board). The host test build
 runs the same commands from a file (`commands=<file>`, `<frame> <command>`
 lines).
+
+The web page (`http://<address>/`) sends the same commands (`POST /cmd`,
+commands as the body), and takes uploads (`POST /riv?name=<file>`, the file
+as the body; `DELETE /riv` forgets it).
 
 On Windows without `nc`, use `tools/rive_cmd.ps1` (plain PowerShell):
 
@@ -373,8 +389,7 @@ Not yet:
 - Report the two partial-redraw bugs (unclipped gradient spans, no damage on
   paint removal) and the `EngineOption::Default` includes SmartRender
   surprise to ThorVG
-- Load `.riv` files from the SD card or over Ethernet instead of embedding
-  them
+- Load `.riv` files from the SD card
 
 ## Licences
 

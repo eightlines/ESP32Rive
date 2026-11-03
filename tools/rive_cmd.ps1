@@ -6,6 +6,8 @@
 #   ./tools/rive_cmd.ps1 "set formula_input 5" "get formula_input"
 #   ./tools/rive_cmd.ps1 -Address 192.168.1.50 list
 #   ./tools/rive_cmd.ps1            # interactive: type commands, empty line quits
+#   ./tools/rive_cmd.ps1 -Upload my_design.riv     # plays it now and after resets
+#   ./tools/rive_cmd.ps1 -Forget                   # back to the embedded file
 #
 # Commands: list | get <path> | set <path> <value> | fire <path> |
 #           down|move|up <x> <y> | info | help
@@ -15,10 +17,40 @@
 param(
     [string]$Address = "169.254.50.50",
     [int]$Port = 7500,
+    [string]$Upload,
+    [switch]$Forget,
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$Commands
 )
 $ErrorActionPreference = "Stop"
+
+# Uploads go to the board's web server (port 80), not the command port.
+if ($Upload) {
+    $path = (Resolve-Path $Upload).Path
+    $name = [Uri]::EscapeDataString([IO.Path]::GetFileName($path))
+    $bytes = [IO.File]::ReadAllBytes($path)
+    Write-Host "Uploading $([IO.Path]::GetFileName($path)) ($($bytes.Length) bytes) to ${Address}..."
+    try {
+        $r = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "http://${Address}/riv?name=$name" `
+            -Body $bytes -ContentType "application/octet-stream" -TimeoutSec 120
+        Write-Host $r.Content
+    } catch {
+        $resp = $_.Exception.Response
+        if ($resp) {
+            $reader = New-Object IO.StreamReader($resp.GetResponseStream())
+            Write-Host -ForegroundColor Red $reader.ReadToEnd()
+        } else {
+            Write-Host -ForegroundColor Red "Upload failed: $($_.Exception.Message)"
+        }
+        exit 1
+    }
+    if (-not $Commands) { exit 0 }
+}
+if ($Forget) {
+    $r = Invoke-WebRequest -UseBasicParsing -Method Delete -Uri "http://${Address}/riv" -TimeoutSec 30
+    Write-Host $r.Content
+    if (-not $Commands) { exit 0 }
+}
 
 try {
     $client = New-Object Net.Sockets.TcpClient
