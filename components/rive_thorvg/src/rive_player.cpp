@@ -95,12 +95,20 @@ bool RivePlayer::load(const uint8_t* data, size_t size)
   m_scene.reset();
   m_artboard.reset();
   rive::ImportResult result;
+  if (m_importBefore)
+  {
+    m_importBefore();
+  }
   m_file = rive::File::import(rive::Span<const uint8_t>(data, size),
                               &m_factory,
                               &result,
                               static_cast<rive::FileAssetLoader*>(nullptr),
                               nullptr, // scripts get a default Luau VM
                               m_requireSignedScripts);
+  if (m_importAfter)
+  {
+    m_importAfter();
+  }
   if (m_file == nullptr || result != rive::ImportResult::success)
   {
     std::printf("RivePlayer: import failed (result %d)\n",
